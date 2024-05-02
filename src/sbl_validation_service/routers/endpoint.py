@@ -9,7 +9,7 @@ from sbl_validation_service.entities.models.dto import ValidationDTO
 from sqlalchemy.orm import Session
 
 
-async def set_db(request: Request, session: Annotated[Session, Depends(get_session)]):
+def set_db(request: Request, session: Annotated[Session, Depends(get_session)]):
     request.state.db_session = session
 
 
@@ -17,7 +17,7 @@ router = Router(dependencies=[Depends(set_db)])
 
 
 @router.post("/submission")
-async def validate_file(request: Request, submission: ValidationDTO):
+def validate_file(request: Request, submission: ValidationDTO):
     validate_and_update_submission(
         request.state.db_session, submission.period, submission.lei, submission.submission_id
     )

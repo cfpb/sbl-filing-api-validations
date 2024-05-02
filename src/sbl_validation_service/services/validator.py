@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from regtech_data_validator.create_schemas import validate_phases, ValidationPhase
 from regtech_data_validator.data_formatters import df_to_json, df_to_download
 from regtech_data_validator.checks import Severity
-from sqlalchemy import MetaData, Table, update
+from sqlalchemy import MetaData, Table, update, select
 from sqlalchemy.orm import Session
 from sbl_validation_service.entities.engine.engine import engine
 from http import HTTPStatus
@@ -66,12 +66,18 @@ def validate_and_update_submission(session: Session, period_code: str, lei: str,
             )
         else:
             state = "VALIDATION_SUCCESSFUL"
+            
+        if is_expired(submission_id):
+           return     
 
-        validation_json = build_validation_results(result)
+        validation_results = build_validation_results(result)
         submission_report = df_to_download(result[1])
         upload_report(period_code, lei, str(submission_id) + "_report", submission_report.encode("utf-8"))
+        
+        if is_expired(submission_id):
+           return 
 
-        updates = {"validation_json": validation_json, "state": state}
+        updates = {"validation_results": validation_results, "state": state}
         update_table(session, submission_id, updates)
 
     except RuntimeError as re:
@@ -114,3 +120,10 @@ def update_table(session: Session, submission_id: id, data: dict):
 
     session.execute(update_stmt)
     session.commit()
+    
+def is_expired(submission_id: id):
+    with engine.connect() as conn:
+        table = Table("submission", MetaData(), autoload_with=engine)
+        select_stmt = select(table.c.state).where(table.c.id == submission_id)
+        result = conn.execute(select_stmt).first()
+        return result[0] == "VALIDATION_EXPIRED"
