@@ -15,7 +15,6 @@ s3 = boto3.client('s3')
 def lambda_handler(event, context):
     log.info("Received event: " + json.dumps(event, indent=None))
 
-    # Get the object from the event and show its content type
     bucket = event['Records'][0]['s3']['bucket']['name']
     key = urllib.parse.unquote_plus(event['Records'][0]['s3']['object']['key'], encoding='utf-8')
     log.info(f"Received key: {key}")
@@ -53,6 +52,5 @@ def lambda_handler(event, context):
             ]
         }
     except Exception as e:
-        print(e)
-        print('Error getting object {} from bucket {}. Make sure they exist and your bucket is in the same region as this function.'.format(key, bucket))
+        log.exception('Failed to process {} in {}'.format(key, bucket))
         raise e
