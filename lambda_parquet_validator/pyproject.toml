@@ -9,6 +9,8 @@ readme = "README.md"
 python = "^3.12"
 regtech-data-validator = {git = "https://github.com/cfpb/regtech-data-validator.git", branch="parquet_validator"}
 boto3 = "~1.34.0"
+sqlalchemy = "^2.0.36"
+psycopg2-binary = "^2.9.10"
 
 
 [build-system]
