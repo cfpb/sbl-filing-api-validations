@@ -60,10 +60,10 @@ def lambda_handler(event, context):
                 if persist_db:
                     db_entries = df.write_database(table_name="findings", connection=db_session, if_table_exists="append")
                     db_session.commit()
-                    log.info("{} findings presisted to db".format(db_entries))
+                    log.info("{} findings persisted to db".format(db_entries))
                 df.write_parquet(buffer)
                 buffer.seek(0)
-                s3.upload_fileobj(buffer, bucket, f"{'/'.join(file_paths[:-1])}/{submission_id}_res/{pq_idx}.parquet")
+                s3.upload_fileobj(buffer, bucket, f"{'/'.join(file_paths[:-1])}/{submission_id}_res/{pq_idx:05}.parquet")
                 pq_idx += 1
     except Exception as e:
         log.exception('Failed to validate {} in {}'.format(key, bucket))

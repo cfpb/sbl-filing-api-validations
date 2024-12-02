@@ -32,7 +32,7 @@ def lambda_handler(event, context):
             buffer = io.BytesIO()
             chunk.to_parquet(buffer)
             buffer.seek(0)
-            s3.upload_fileobj(buffer, bucket, f"{res_folder}{pq_idx}.parquet")
+            s3.upload_fileobj(buffer, bucket, f"{res_folder}{pq_idx:05}.parquet")
             pq_idx += 1
 
         return {
