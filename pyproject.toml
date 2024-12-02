@@ -14,7 +14,7 @@ sqlalchemy = "^2.0.23"
 psycopg2-binary = "^2.9.9"
 regtech-api-commons = {git = "https://github.com/cfpb/regtech-api-commons.git"}
 regtech-data-validator = {git = "https://github.com/cfpb/regtech-data-validator.git"}
-python-multipart = "^0.0.7"
+python-multipart = "^0.0.18"
 fsspec = "^2024.2.0"
 s3fs = "^2024.2.0"
 httpx = "^0.26.0"
