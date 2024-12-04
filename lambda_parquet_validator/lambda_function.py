@@ -56,6 +56,7 @@ def lambda_handler(event, context):
             if validation_results.findings.height:
                 buffer = io.BytesIO()
                 df = validation_results.findings.with_columns(phase=pl.lit(validation_results.phase), submission_id=pl.lit(submission_id))
+                df = df.cast({"phase": pl.String})
                 log.info("findings found for batch {}: {}".format(pq_idx, df.height))
                 if persist_db:
                     db_entries = df.write_database(table_name="findings", connection=db_session, if_table_exists="append")
