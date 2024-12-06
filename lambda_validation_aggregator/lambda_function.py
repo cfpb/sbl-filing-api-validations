@@ -34,6 +34,14 @@ def lambda_handler(event, context):
     key = urllib.parse.unquote_plus(request['Records'][0]['s3']['object']['key'], encoding='utf-8')
     log.info(f"Received key: {key}")
 
+    try:
+        asyncio.run(aggregate_validation_result(bucket, key))
+    except Exception as e:
+        log.exception('Failed to validate {} in {}'.format(key, bucket))
+        raise e
+
+async def aggregate_validation_result(bucket, key):
+
     file_paths = [path for path in key.split('/') if path]
     file_name = file_paths[-1]
     period = file_paths[1]
@@ -42,45 +50,52 @@ def lambda_handler(event, context):
     sub_match = re.match(sub_id_regex, file_name)
     sub_counter = sub_match.group()
 
-    session = boto3.session.Session()
-    creds = session.get_credentials()
-    storage_options = {
-        'aws_access_key_id': creds.access_key,
-        'aws_secret_access_key': creds.secret_key,
-        'session_token': creds.token,
-        'aws_region': 'us-east-1',
-    }
+    async with await get_db_session() as db_session:
+        submission = await get_submission(db_session, lei, period, sub_counter)
 
-    try:
-        lf = pl.scan_parquet(f"s3://{bucket}/{key}", allow_missing_columns=True, storage_options=storage_options)
-        df = lf.collect()
-        error_counts, warning_counts = get_scope_counts(df)
+        if submission and submission.state not in [SubmissionState.SUBMISSION_ACCEPTED, SubmissionState.VALIDATION_EXPIRED, SubmissionState.SUBMISSION_UPLOAD_MALFORMED]:
+            aws_session = boto3.session.Session()
+            creds = aws_session.get_credentials()
+            storage_options = {
+                'aws_access_key_id': creds.access_key,
+                'aws_secret_access_key': creds.secret_key,
+                'session_token': creds.token,
+                'aws_region': 'us-east-1',
+            }
+            lf = pl.scan_parquet(f"s3://{bucket}/{key}", allow_missing_columns=True, storage_options=storage_options)
+            df = lf.collect()
+            error_counts, warning_counts = get_scope_counts(df)
 
-        validation_results = ValidationResults(
-            error_counts=error_counts,
-            warning_counts=warning_counts,
-            is_valid=((error_counts.total_count + warning_counts.total_count) == 0),
-            findings=df,
-            phase=df.select(pl.first("phase")).item(),
-        )
-
-        final_df = pl.concat([df], how="diagonal")
-
-        if final_df.is_empty():
-            final_state = SubmissionState.VALIDATION_SUCCESSFUL
-        else:
-            final_state = (
-                SubmissionState.VALIDATION_WITH_ERRORS
-                if lf.filter(pl.col('validation_type') == 'Error').collect().height > 0
-                else SubmissionState.VALIDATION_WITH_WARNINGS
+            validation_results = ValidationResults(
+                error_counts=error_counts,
+                warning_counts=warning_counts,
+                is_valid=((error_counts.total_count + warning_counts.total_count) == 0),
+                findings=df,
+                phase=df.select(pl.first("phase")).item(),
             )
-        
-        final_df = build_validation_results(final_df, [validation_results], validation_results.phase)
 
-        asyncio.run(update_submission(lei, period, sub_counter, final_state, final_df))
-    except Exception as e:
-        log.exception('Failed to validate {} in {}'.format(key, bucket))
-        raise e
+            final_df = pl.concat([df], how="diagonal")
+
+            if final_df.is_empty():
+                final_state = SubmissionState.VALIDATION_SUCCESSFUL
+            else:
+                final_state = (
+                    SubmissionState.VALIDATION_WITH_ERRORS
+                    if lf.filter(pl.col('validation_type') == 'Error').collect().height > 0
+                    else SubmissionState.VALIDATION_WITH_WARNINGS
+                )
+            
+            final_df = build_validation_results(final_df, [validation_results], validation_results.phase)
+            submission.state = final_state
+            submission.validation_results = df
+            await db_session.commit()
+
+async def get_submission(session: AsyncSession, lei: str, period: str, counter: int):
+    stmt = (
+        select(SubmissionDAO)
+        .where(SubmissionDAO.filing == FilingDAO.id, FilingDAO.lei == lei, FilingDAO.filing_period == period, SubmissionDAO.counter == counter)
+    )
+    return await session.scalar(stmt)
 
 def build_validation_results(final_df: pl.DataFrame, results: list[ValidationResults], final_phase: ValidationPhase):
     max_records = 1000000
@@ -126,19 +141,7 @@ def build_validation_results(final_df: pl.DataFrame, results: list[ValidationRes
 
     return val_res
 
-async def update_submission(lei: str, period: str, counter: int, state: SubmissionState, df: dict):
-    async with await get_session_local() as session:
-        stmt = (
-            select(SubmissionDAO)
-            .where(SubmissionDAO.filing == FilingDAO.id, FilingDAO.lei == lei, FilingDAO.filing_period == period, SubmissionDAO.counter == 1)
-        )
-        submission = await session.scalar(stmt)
-        if submission and submission.state not in []:
-            submission.state = state
-            submission.validation_results = df
-            await session.commit()
-
-async def get_session_local() -> AsyncSession:
+async def get_db_session() -> AsyncSession:
     secret = get_secret(os.getenv("DB_SECRET", None))
     postgres_dsn = PostgresDsn.build(
         scheme="postgresql+asyncpg",
