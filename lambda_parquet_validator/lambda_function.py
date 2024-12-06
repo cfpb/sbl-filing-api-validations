@@ -48,6 +48,8 @@ def lambda_handler(event, context):
         'aws_region': 'us-east-1',
     }
 
+    validation_result_path = f"{'/'.join(file_paths[:-1])}/{submission_id}_res/"
+
     try:
         db_session = get_db_session()
         lf = pl.scan_parquet(f"s3://{bucket}/{key}", allow_missing_columns=True, storage_options=storage_options)
@@ -64,8 +66,25 @@ def lambda_handler(event, context):
                     log.info("{} findings persisted to db".format(db_entries))
                 df.write_parquet(buffer)
                 buffer.seek(0)
-                s3.upload_fileobj(buffer, bucket, f"{'/'.join(file_paths[:-1])}/{submission_id}_res/{pq_idx:05}.parquet")
+                s3.upload_fileobj(buffer, bucket, f"{validation_result_path}{pq_idx:05}.parquet")
                 pq_idx += 1
+
+        return {
+            'statusCode': 200,
+            'body': json.dumps('done validating!'),
+            "Records": [
+                {
+                    "s3": {
+                        "bucket": {
+                            "name": bucket
+                        },
+                        "object": {
+                            "key": validation_result_path
+                        }
+                    }
+                }
+            ]
+        }
     except Exception as e:
         log.exception('Failed to validate {} in {}'.format(key, bucket))
         raise e
