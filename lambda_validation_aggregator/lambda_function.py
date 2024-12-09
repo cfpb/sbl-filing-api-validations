@@ -48,7 +48,7 @@ async def aggregate_validation_result(bucket, key):
     lei = file_paths[2]
     sub_id_regex = r"\d+"
     sub_match = re.match(sub_id_regex, file_name)
-    sub_counter = sub_match.group()
+    sub_counter = int(sub_match.group())
 
     async with await get_db_session() as db_session:
         submission = await get_submission(db_session, lei, period, sub_counter)
@@ -87,7 +87,7 @@ async def aggregate_validation_result(bucket, key):
             
             final_df = build_validation_results(final_df, [validation_results], validation_results.phase)
             submission.state = final_state
-            submission.validation_results = df
+            submission.validation_results = final_df
             await db_session.commit()
 
 async def get_submission(session: AsyncSession, lei: str, period: str, counter: int):
@@ -177,14 +177,14 @@ def get_secret(secret_name):
 #         {
 #             "Records": [
 #                 {
-#                 "s3": {
-#                     "bucket": {
+#                     "s3": {
+#                         "bucket": {
 #                         "name": "cfpb-regtech-devpub-lc-test"
-#                     },
-#                     "object": {
-#                         "key": "upload/2024/1234364890REGTECH006/6254_pqs/"
+#                         },
+#                         "object": {
+#                         "key": "upload/2024/1234364890REGTECH015/1_res/"
+#                         }
 #                     }
-#                 }
 #                 }
 #             ]
 #         }
