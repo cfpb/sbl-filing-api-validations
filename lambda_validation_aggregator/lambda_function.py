@@ -98,9 +98,7 @@ async def get_submission(session: AsyncSession, lei: str, period: str, counter: 
     return await session.scalar(stmt)
 
 def build_validation_results(final_df: pl.DataFrame, results: list[ValidationResults], final_phase: ValidationPhase):
-    max_records = 1000000
-    max_group_size = 200
-    val_json = df_to_dicts(final_df, max_records, max_group_size)
+    val_json = df_to_dicts(final_df, int(os.getenv("MAX_RECORDS", 1000000)), int(os.getenv("MAX_GROUP_SIZE", 200)))
     if final_phase == ValidationPhase.SYNTACTICAL:
         syntax_error_counts = sum([r.error_counts.single_field_count for r in results])
         val_res = {
