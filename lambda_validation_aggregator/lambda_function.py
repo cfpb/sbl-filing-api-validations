@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sbl_filing_api.entities.models.dao import SubmissionDAO, SubmissionState, FilingDAO
 from regtech_data_validator.validator import get_scope_counts, ValidationPhase, ValidationResults, ValidationPhase
-from regtech_data_validator.data_formatters import df_to_dicts
+from regtech_data_validator.data_formatters import df_to_dicts, df_to_download
 from regtech_data_validator.checks import Severity
 
 log = logging.getLogger()
@@ -50,8 +50,13 @@ async def aggregate_validation_result(bucket, key):
     sub_match = re.match(sub_id_regex, file_name)
     sub_counter = int(sub_match.group())
 
+    validation_report_path = f"{'/'.join(file_paths[:-1])}/{sub_counter}_report.csv"
+
     async with await get_db_session() as db_session:
         submission = await get_submission(db_session, lei, period, sub_counter)
+
+        max_errors = os.getenv("MAX_ERRORS", 1000000)
+        max_group_size = os.getenv("MAX_GROUP_SIZE", 200)
 
         if submission and submission.state not in [SubmissionState.SUBMISSION_ACCEPTED, SubmissionState.VALIDATION_EXPIRED, SubmissionState.SUBMISSION_UPLOAD_MALFORMED]:
             aws_session = boto3.session.Session()
@@ -63,8 +68,14 @@ async def aggregate_validation_result(bucket, key):
                 'aws_region': 'us-east-1',
             }
             lf = pl.scan_parquet(f"s3://{bucket}/{key}", allow_missing_columns=True, storage_options=storage_options)
-            df = lf.collect()
+            max_err_lf = lf.slice(0, max_errors + 1)
+            df = max_err_lf.collect()
             error_counts, warning_counts = get_scope_counts(df)
+            csv_df = pl.concat([df], how="diagonal")
+            csv_content = df_to_download(csv_df, warning_counts.total_count, error_counts.total_count, max_errors)
+            s3.put_object(Body=csv_content, Bucket=bucket, Key=validation_report_path)
+
+            df = max_err_lf.group_by(pl.col("validation_id")).head(max_group_size).collect()
 
             validation_results = ValidationResults(
                 error_counts=error_counts,
@@ -85,9 +96,9 @@ async def aggregate_validation_result(bucket, key):
                     else SubmissionState.VALIDATION_WITH_WARNINGS
                 )
             
-            final_df = build_validation_results(final_df, [validation_results], validation_results.phase)
+            validation_res = build_validation_results(final_df, [validation_results], validation_results.phase)
             submission.state = final_state
-            submission.validation_results = final_df
+            submission.validation_results = validation_res
             await db_session.commit()
 
 async def get_submission(session: AsyncSession, lei: str, period: str, counter: int):
