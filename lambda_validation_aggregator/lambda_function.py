@@ -6,17 +6,11 @@ import urllib.parse
 import polars as pl
 import boto3
 import boto3.session
-import asyncio
 from botocore.exceptions import ClientError
 
 from pydantic import PostgresDsn
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import (
-    create_async_engine,
-    async_sessionmaker,
-    async_scoped_session,
-    AsyncSession
-)
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, scoped_session, sessionmaker
 from sbl_filing_api.entities.models.dao import SubmissionDAO, SubmissionState, FilingDAO
 from regtech_data_validator.validator import get_scope_counts, ValidationPhase, ValidationResults, ValidationPhase
 from regtech_data_validator.data_formatters import df_to_dicts, df_to_download
@@ -35,12 +29,12 @@ def lambda_handler(event, context):
     log.info(f"Received key: {key}")
 
     try:
-        asyncio.run(aggregate_validation_result(bucket, key))
+        aggregate_validation_result(bucket, key)
     except Exception as e:
         log.exception('Failed to validate {} in {}'.format(key, bucket))
         raise e
 
-async def aggregate_validation_result(bucket, key):
+def aggregate_validation_result(bucket, key):
 
     file_paths = [path for path in key.split('/') if path]
     file_name = file_paths[-1]
@@ -52,8 +46,11 @@ async def aggregate_validation_result(bucket, key):
 
     validation_report_path = f"{'/'.join(file_paths[:-1])}/{sub_counter}_report.csv"
 
-    async with await get_db_session() as db_session:
-        submission = await get_submission(db_session, lei, period, sub_counter)
+    with get_db_session() as db_session:
+        submission = (
+            db_session.query(SubmissionDAO)
+                .where(SubmissionDAO.filing == FilingDAO.id, FilingDAO.lei == lei, FilingDAO.filing_period == period, SubmissionDAO.counter == sub_counter)
+        ).one()
 
         max_errors = os.getenv("MAX_ERRORS", 1000000)
         max_group_size = os.getenv("MAX_GROUP_SIZE", 200)
@@ -99,14 +96,7 @@ async def aggregate_validation_result(bucket, key):
             validation_res = build_validation_results(final_df, [validation_results], validation_results.phase)
             submission.state = final_state
             submission.validation_results = validation_res
-            await db_session.commit()
-
-async def get_submission(session: AsyncSession, lei: str, period: str, counter: int):
-    stmt = (
-        select(SubmissionDAO)
-        .where(SubmissionDAO.filing == FilingDAO.id, FilingDAO.lei == lei, FilingDAO.filing_period == period, SubmissionDAO.counter == counter)
-    )
-    return await session.scalar(stmt)
+            db_session.commit()
 
 def build_validation_results(final_df: pl.DataFrame, results: list[ValidationResults], final_phase: ValidationPhase):
     val_json = df_to_dicts(final_df, int(os.getenv("MAX_RECORDS", 1000000)), int(os.getenv("MAX_GROUP_SIZE", 200)))
@@ -150,20 +140,20 @@ def build_validation_results(final_df: pl.DataFrame, results: list[ValidationRes
 
     return val_res
 
-async def get_db_session() -> AsyncSession:
+def get_db_session() -> Session:
     secret = get_secret(os.getenv("DB_SECRET", None))
     postgres_dsn = PostgresDsn.build(
-        scheme="postgresql+asyncpg",
+        scheme="postgresql+psycopg2",
         username=secret['username'],
         password=urllib.parse.quote(secret['password'], safe=""),
         host=secret['host'],
         path=secret['database'],
     )
-    engine = create_async_engine(
+    engine = create_engine(
         postgres_dsn.unicode_string(),
         echo=True,
     )
-    SessionLocal = async_scoped_session(async_sessionmaker(engine, expire_on_commit=False), asyncio.current_task)
+    SessionLocal = scoped_session(sessionmaker(engine, expire_on_commit=False))
     return SessionLocal()
 
 def get_secret(secret_name):
