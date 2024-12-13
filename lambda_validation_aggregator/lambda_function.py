@@ -179,22 +179,3 @@ def get_secret(secret_name):
 
     secret = get_secret_value_response['SecretString']
     return json.loads(secret)
-
-
-# if __name__ == '__main__':
-#     lambda_handler(
-#         {
-#             "Records": [
-#                 {
-#                     "s3": {
-#                         "bucket": {
-#                         "name": "cfpb-regtech-devpub-lc-test"
-#                         },
-#                         "object": {
-#                         "key": "upload/2024/1234364890REGTECH015/1_res/"
-#                         }
-#                     }
-#                 }
-#             ]
-#         }
-#         , None)
