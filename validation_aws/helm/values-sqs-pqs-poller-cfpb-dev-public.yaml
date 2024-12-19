@@ -1,0 +1,39 @@
+fullnameOverride: "sqs-pqs-poller"
+image:
+  repository: 099248080076.dkr.ecr.us-east-1.amazonaws.com/cfpb/regtech/sqs-validate
+  pullPolicy: Always
+  tag: "latest"
+
+healthcheck:
+  enabled: false
+
+serviceAccount:
+  name: cfpb-ci-sa-sqs
+
+envFrom:
+- configMapRef:
+    name: "{{ .Values.configmap.name }}"
+
+ignore_healthChecks: true
+
+configmap:
+  enabled: true
+  name: sqs-pqs-poller
+  data:
+    QUEUE_URL: https://sqs.us-east-1.amazonaws.com/099248080076/cfpb-regtech-dev-pqs-validate
+    DB_SECRET: cfpb/team/regtech/rds/postgres/regtech-sbl-prototype/databases/filing_db/filing_user-credentials
+    DB_PERSIST: "true"
+    JOB_IMAGE: "099248080076.dkr.ecr.us-east-1.amazonaws.com/cfpb/regtech/sqs-validator-job:latest"
+
+volumes:
+- name: sqs-pqs-poller-secrets
+  csi:
+    driver: secrets-store.csi.k8s.io
+    readOnly: true
+    volumeAttributes:
+      secretProviderClass: regtech-provider
+
+volumeMounts:
+- name: sqs-pqs-poller-secrets
+  mountPath: "/mnt/secrets-store"
+  readOnly: true

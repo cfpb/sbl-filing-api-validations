@@ -17,24 +17,9 @@ from regtech_data_validator.data_formatters import df_to_dicts, df_to_download
 from regtech_data_validator.checks import Severity
 
 log = logging.getLogger()
-log.setLevel(logging.INFO)
 
-s3 = boto3.client('s3')
-
-def lambda_handler(event, context):
-    request = event['responsePayload'] if 'responsePayload' in event else event
-
-    bucket = request['Records'][0]['s3']['bucket']['name']
-    key = urllib.parse.unquote_plus(request['Records'][0]['s3']['object']['key'], encoding='utf-8')
-    log.info(f"Received key: {key}")
-
-    try:
-        aggregate_validation_result(bucket, key)
-    except Exception as e:
-        log.exception('Failed to validate {} in {}'.format(key, bucket))
-        raise e
-
-def aggregate_validation_result(bucket, key):
+def aggregate_validation_results(bucket, key):
+    s3 = boto3.client('s3')
 
     file_paths = [path for path in key.split('/') if path]
     file_name = file_paths[-1]
@@ -64,12 +49,17 @@ def aggregate_validation_result(bucket, key):
                 'session_token': creds.token,
                 'aws_region': 'us-east-1',
             }
-            lf = pl.scan_parquet(f"s3://{bucket}/{key}", allow_missing_columns=True, storage_options=storage_options)
+
+            s3_objs = s3.list_objects_v2(Bucket=bucket, Prefix=key)
+            file_paths = [f"s3://{bucket}/{obj['Key']}" for obj in s3_objs.get('Contents', []) if obj['Key'].endswith(".parquet")]
+
+            lazyframes = [pl.scan_parquet(file, allow_missing_columns=True, storage_options=storage_options) for file in file_paths]
+            lf = pl.concat(lazyframes, how="diagonal")
+            
             max_err_lf = lf.slice(0, max_errors + 1)
             df = max_err_lf.collect()
             error_counts, warning_counts = get_scope_counts(df)
-            csv_df = pl.concat([df], how="diagonal")
-            csv_content = df_to_download(csv_df, warning_counts.total_count, error_counts.total_count, max_errors)
+            csv_content = df_to_download(df, warning_counts.total_count, error_counts.total_count, max_errors)
             s3.put_object(Body=csv_content, Bucket=bucket, Key=validation_report_path)
 
             df = max_err_lf.group_by(pl.col("validation_id")).head(max_group_size).collect()
