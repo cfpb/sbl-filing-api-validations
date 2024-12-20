@@ -1,0 +1,37 @@
+fullnameOverride: "sqs-res-poller"
+image:
+  repository: 099248080076.dkr.ecr.us-east-1.amazonaws.com/cfpb/regtech/sqs-aggregator
+  pullPolicy: Always
+  tag: "latest"
+
+healthcheck:
+  enabled: false
+
+serviceAccount:
+  name: cfpb-ci-sa-sqs
+
+envFrom:
+- configMapRef:
+    name: "{{ .Values.configmap.name }}"
+
+ignore_healthChecks: true
+
+configmap:
+  enabled: true
+  name: sqs-res-poller
+  data:
+    QUEUE_URL: https://sqs.us-east-1.amazonaws.com/099248080076/cfpb-regtech-dev-res-aggregate
+    DB_SECRET: cfpb/team/regtech/rds/postgres/regtech-sbl-prototype/databases/filing_db/filing_user-credentials
+
+volumes:
+- name: sqs-res-poller-secrets
+  csi:
+    driver: secrets-store.csi.k8s.io
+    readOnly: true
+    volumeAttributes:
+      secretProviderClass: regtech-provider
+
+volumeMounts:
+- name: sqs-res-poller-secrets
+  mountPath: "/mnt/secrets-store"
+  readOnly: true

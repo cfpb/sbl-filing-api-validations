@@ -1,30 +1,25 @@
+import boto3
+import boto3.session
 import os
-import re
 import io
 import json
 import logging
-import urllib.parse
 import polars as pl
-import boto3
-import boto3.session
-from botocore.exceptions import ClientError
+import re
 
+
+from botocore.exceptions import ClientError
 from pydantic import PostgresDsn
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker, Session
+
 from regtech_data_validator.validator import validate_lazy_frame
 
 log = logging.getLogger()
-log.setLevel(logging.INFO)
 
-s3 = boto3.client('s3')
-
-def lambda_handler(event, context):
-    request = event['responsePayload'] if 'responsePayload' in event else event
-
-    bucket = request['Records'][0]['s3']['bucket']['name']
-    key = urllib.parse.unquote_plus(request['Records'][0]['s3']['object']['key'], encoding='utf-8')
-    log.info(f"Received key: {key}")
+def validate_parquets(bucket: str, key: str):
+    print(f"Validating parquets in {bucket}, File {key}", flush=True)
+    s3 = boto3.client('s3')
 
     file_paths = [path for path in key.split('/') if path]
     file_name = file_paths[-1]
@@ -49,9 +44,9 @@ def lambda_handler(event, context):
     }
 
     validation_result_path = f"{'/'.join(file_paths[:-1])}/{submission_id}_res/"
+    print(f"Validating result path {validation_result_path}", flush=True)
 
     try:
-        db_session = get_db_session()
         lf = pl.scan_parquet(f"s3://{bucket}/{key}", allow_missing_columns=True, storage_options=storage_options)
 
         for validation_results in validate_lazy_frame(lf, {"lei": lei}, batch_size=batch_size, max_errors=max_errors):
@@ -61,6 +56,7 @@ def lambda_handler(event, context):
                 df = df.cast({"phase": pl.String})
                 log.info("findings found for batch {}: {}".format(pq_idx, df.height))
                 if persist_db:
+                    db_session = get_db_session()
                     db_entries = df.write_database(table_name="findings", connection=db_session, if_table_exists="append")
                     db_session.commit()
                     log.info("{} findings persisted to db".format(db_entries))
