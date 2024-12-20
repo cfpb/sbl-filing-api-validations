@@ -12,7 +12,7 @@ from pydantic import PostgresDsn
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, scoped_session, sessionmaker
 from sbl_filing_api.entities.models.dao import SubmissionDAO, SubmissionState, FilingDAO
-from regtech_data_validator.validator import get_scope_counts, ValidationPhase, ValidationResults, ValidationPhase
+from regtech_data_validator.validator import get_scope_counts, ValidationPhase, ValidationResults
 from regtech_data_validator.data_formatters import df_to_dicts, df_to_download
 from regtech_data_validator.checks import Severity
 
@@ -53,33 +53,44 @@ def aggregate_validation_results(bucket, key):
             s3_objs = s3.list_objects_v2(Bucket=bucket, Prefix=key)
             file_paths = [f"s3://{bucket}/{obj['Key']}" for obj in s3_objs.get('Contents', []) if obj['Key'].endswith(".parquet")]
 
+            #scan each result parquet into a lazyframe then diagonally concat so all columns are merged into the final lf.  Otherwise
+            #this will error if trying to scan a parquet directory and the parquets don't contain the same columns (particularly the
+            #field/value columns)
             lazyframes = [pl.scan_parquet(file, allow_missing_columns=True, storage_options=storage_options) for file in file_paths]
-            lf = pl.concat(lazyframes, how="diagonal")
+            lf = pl.LazyFrame()
+            if lazyframes:
+                lf = pl.concat(lazyframes, how="diagonal")
             
-            max_err_lf = lf.slice(0, max_errors + 1)
-            df = max_err_lf.collect()
+            #get the real total count of errors and warnings before truncating based on max error length
+            df = lf.collect()
             error_counts, warning_counts = get_scope_counts(df)
-            csv_content = df_to_download(df, warning_counts.total_count, error_counts.total_count, max_errors)
+            #slice is start indice inclusive, so 0 to max_errors will return 1000000 errors (0-999999) if the 
+            #max_errors is 1000000 and there are more than that.  Adding +1 actually returns 
+            #max_errors + 1 which would be one more than the max_errors intended
+            final_df = df.slice(0, max_errors)
+            
+            #build report csv and push to S3
+            csv_content = df_to_download(final_df, warning_counts.total_count, error_counts.total_count, max_errors)
             s3.put_object(Body=csv_content, Bucket=bucket, Key=validation_report_path)
 
-            df = max_err_lf.group_by(pl.col("validation_id")).head(max_group_size).collect()
+            #truncate the final_df again for the json validation results we send to the frontend
+            if not final_df.is_empty():
+                final_df = lf.group_by(pl.col("validation_id")).head(max_group_size).collect()
 
             validation_results = ValidationResults(
                 error_counts=error_counts,
                 warning_counts=warning_counts,
                 is_valid=((error_counts.total_count + warning_counts.total_count) == 0),
-                findings=df,
-                phase=df.select(pl.first("phase")).item(),
+                findings=final_df,
+                phase=final_df.select(pl.first("phase")).item() if not final_df.is_empty() else ValidationPhase.LOGICAL,
             )
 
-            final_df = pl.concat([df], how="diagonal")
-
-            if final_df.is_empty():
+            if validation_results.is_valid:
                 final_state = SubmissionState.VALIDATION_SUCCESSFUL
             else:
                 final_state = (
                     SubmissionState.VALIDATION_WITH_ERRORS
-                    if lf.filter(pl.col('validation_type') == 'Error').collect().height > 0
+                    if validation_results.error_counts.total_count != 0
                     else SubmissionState.VALIDATION_WITH_WARNINGS
                 )
             
