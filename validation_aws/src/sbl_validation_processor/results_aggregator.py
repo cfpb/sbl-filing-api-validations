@@ -8,6 +8,7 @@ import boto3
 import boto3.session
 from botocore.exceptions import ClientError
 
+from io import BytesIO
 from pydantic import PostgresDsn
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, scoped_session, sessionmaker
@@ -18,13 +19,45 @@ from regtech_data_validator.checks import Severity
 
 log = logging.getLogger()
 
-def aggregate_validation_results(bucket, key):
-    s3 = boto3.client('s3')
+def get_parquet_paths(bucket: str, key: str):
+    env = os.getenv('ENV', 'S3')
+    if env == 'LOCAL':
+        dir_path = os.path.join(bucket, key)
+        if not os.path.isdir(dir_path):
+            return [], {}
+        return [
+            os.path.join(dir_path, file) for file in os.listdir(dir_path) if file.endswith(".parquet")
+        ], {}
+    else:
+        aws_session = boto3.session.Session()
+        creds = aws_session.get_credentials()
+        storage_options = {
+            'aws_access_key_id': creds.access_key,
+            'aws_secret_access_key': creds.secret_key,
+            'session_token': creds.token,
+            'aws_region': 'us-east-1',
+        }
 
+        s3 = boto3.client('s3')
+        s3_objs = s3.list_objects_v2(Bucket=bucket, Prefix=key)
+        return [f"s3://{bucket}/{obj['Key']}" for obj in s3_objs.get('Contents', []) if obj['Key'].endswith(".parquet")], storage_options
+
+def write_report(report_data: BytesIO, bucket: str, report_file: str):
+    env = os.getenv('ENV', 'S3')
+    if env == 'LOCAL':
+        file_path = os.path.join(bucket, report_file)
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        with open(file_path, 'wb') as f:
+            f.write(report_data)
+    else:
+        s3 = boto3.client('s3')
+        s3.put_object(Body=report_data, Bucket=bucket, Key=report_file)
+
+def aggregate_validation_results(bucket, key):
     file_paths = [path for path in key.split('/') if path]
     file_name = file_paths[-1]
-    period = file_paths[1]
-    lei = file_paths[2]
+    period = file_paths[-3]
+    lei = file_paths[-2]
     sub_id_regex = r"\d+"
     sub_match = re.match(sub_id_regex, file_name)
     sub_counter = int(sub_match.group())
@@ -41,17 +74,8 @@ def aggregate_validation_results(bucket, key):
         max_group_size = os.getenv("MAX_GROUP_SIZE", 200)
 
         if submission and submission.state not in [SubmissionState.SUBMISSION_ACCEPTED, SubmissionState.VALIDATION_EXPIRED, SubmissionState.SUBMISSION_UPLOAD_MALFORMED]:
-            aws_session = boto3.session.Session()
-            creds = aws_session.get_credentials()
-            storage_options = {
-                'aws_access_key_id': creds.access_key,
-                'aws_secret_access_key': creds.secret_key,
-                'session_token': creds.token,
-                'aws_region': 'us-east-1',
-            }
 
-            s3_objs = s3.list_objects_v2(Bucket=bucket, Prefix=key)
-            file_paths = [f"s3://{bucket}/{obj['Key']}" for obj in s3_objs.get('Contents', []) if obj['Key'].endswith(".parquet")]
+            file_paths, storage_options = get_parquet_paths(bucket, key)
 
             #scan each result parquet into a lazyframe then diagonally concat so all columns are merged into the final lf.  Otherwise
             #this will error if trying to scan a parquet directory and the parquets don't contain the same columns (particularly the
@@ -71,7 +95,7 @@ def aggregate_validation_results(bucket, key):
             
             #build report csv and push to S3
             csv_content = df_to_download(final_df, warning_counts.total_count, error_counts.total_count, max_errors)
-            s3.put_object(Body=csv_content, Bucket=bucket, Key=validation_report_path)
+            write_report(csv_content, bucket, validation_report_path)
 
             #truncate the final_df again for the json validation results we send to the frontend
             if not final_df.is_empty():
@@ -142,13 +166,25 @@ def build_validation_results(final_df: pl.DataFrame, results: list[ValidationRes
     return val_res
 
 def get_db_session() -> Session:
-    secret = get_secret(os.getenv("DB_SECRET", None))
+    env = os.getenv('ENV', 'S3')
+    if env == 'LOCAL':
+        user=os.getenv("DB_USER")
+        passwd=os.getenv("DB_PWD")
+        host=os.getenv("DB_HOST")
+        db=os.getenv("DB_NAME")
+    else:
+        secret = get_secret(os.getenv("DB_SECRET", None))
+        user=secret['username']
+        passwd=secret['password']
+        host=secret['host']
+        db=secret['database']
+
     postgres_dsn = PostgresDsn.build(
         scheme="postgresql+psycopg2",
-        username=secret['username'],
-        password=urllib.parse.quote(secret['password'], safe=""),
-        host=secret['host'],
-        path=secret['database'],
+        username=user,
+        password=urllib.parse.quote(passwd, safe=""),
+        host=host,
+        path=db,
     )
     engine = create_engine(
         postgres_dsn.unicode_string(),
