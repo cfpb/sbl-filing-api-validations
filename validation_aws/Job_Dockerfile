@@ -11,8 +11,11 @@ COPY src/ ./src/
 RUN poetry config virtualenvs.create false
 RUN poetry install --no-dev
 
-COPY sqs_parquet_validation/validator_job.py .
+ARG JOB_PATH=""
+ENV JOB_PATH=${JOB_PATH}
 
-CMD python validator_job.py
+COPY ${JOB_PATH}/job.py .
+
+CMD python job.py
 
 
