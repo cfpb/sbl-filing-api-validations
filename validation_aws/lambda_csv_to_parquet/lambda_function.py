@@ -15,6 +15,6 @@ def lambda_handler(event, context):
     key = urllib.parse.unquote_plus(event['Records'][0]['s3']['object']['key'], encoding='utf-8')
     log.info(f"Received key: {key}")
     if "report.csv" not in key:
-        split_csv_into_parquet(bucket, key)
+        return split_csv_into_parquet(bucket, key)
     else:
         raise RuntimeWarning("not processing report.csv: %s", key)
