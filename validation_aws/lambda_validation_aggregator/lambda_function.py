@@ -7,7 +7,12 @@ log = logging.getLogger()
 log.setLevel(logging.INFO)
 
 def lambda_handler(event, context):
-    request = event['responsePayload'] if 'responsePayload' in event else event
+    if 'detail' in event:
+        request = event['detail']
+    elif 'responsePayload' in event:
+        request = event['responsePayload']
+    else:
+        request = event
 
     bucket = request['Records'][0]['s3']['bucket']['name']
     key = urllib.parse.unquote_plus(request['Records'][0]['s3']['object']['key'], encoding='utf-8')
