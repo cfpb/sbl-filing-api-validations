@@ -6,8 +6,6 @@ import logging
 from datetime import datetime
 from kubernetes import client, config
 
-from sbl_validation_processor.parquet_validator import validate_parquets
-
 logger = logging.getLogger()
 logger.setLevel("INFO")
 
@@ -31,18 +29,16 @@ def watch_queue():
         if response and 'Messages' in response:
             receipt = response['Messages'][0]['ReceiptHandle']
             event = json.loads(response['Messages'][0]['Body'])
-            if 'Records' in event and 's3' in event['Records'][0]:
+            if 'detail' in event and 's3' in event['detail']['Records'][0]:
                 try:
-                    bucket = event['Records'][0]['s3']['bucket']['name']
-                    file = event['Records'][0]['s3']['object']['key']
-                    logger.info(f"Received Event from Bucket {bucket}, File {file}")
-                    print(f"Received Event from Bucket {bucket}, File {file}", flush=True)
+                    bucket = event['detail']['Records'][0]['s3']['bucket']['name']
+                    key = event['detail']['Records'][0]['s3']['object']['key']
+                    logger.info(f"Received Event from Bucket {bucket}, File {key}")
+                    print(f"Received Event from Bucket {bucket}, File {key}", flush=True)
 
-                    paths = file.split('/')
-                    sub_id = paths[-1].split(".")[0]
-                    key = "/".join(paths[:-1]) + f"/{sub_id}_pqs/"
+                    paths = key.split('/')
+                    sub_id = paths[-1].split("_pqs")[0]
 
-                    
                     fire_k8s_job(bucket, key, f"{sub_id}-{paths[-2]}-{paths[-3]}")
 
 
@@ -69,8 +65,9 @@ def fire_k8s_job(bucket: str, key: str, job_id: str):
                         client.V1Container(
                             name=f"validator-job-{timestamp}",
                             image=os.getenv("JOB_IMAGE"),
-                            command=["python","validator_job.py"],
+                            command=["python","job.py"],
                             args=["--bucket", bucket, "--key", key],
+                            env=[client.V1EnvVar(name="EVENT_BUS", value=os.getenv("EVENT_BUS"))]
                         )
                     ],
                     restart_policy="Never",
