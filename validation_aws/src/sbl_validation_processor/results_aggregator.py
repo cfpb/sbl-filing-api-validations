@@ -62,7 +62,10 @@ def aggregate_validation_results(bucket, key):
     sub_match = re.match(sub_id_regex, file_name)
     sub_counter = int(sub_match.group())
 
-    validation_report_path = f"{'/'.join(file_paths[:-1])}/{sub_counter}_report.csv"
+    if root := os.getenv('S3_ROOT'):
+        validation_report_path = f"{root}/{'/'.join(file_paths[1:-1])}/{sub_counter}_report.csv"
+    else:
+        validation_report_path = f"{'/'.join(file_paths[:-1])}/{sub_counter}_report.csv"
 
     with get_db_session() as db_session:
         submission = (

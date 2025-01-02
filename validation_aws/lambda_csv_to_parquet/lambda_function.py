@@ -14,8 +14,13 @@ eb = boto3.client('events')
 def lambda_handler(event, context):
     log.info("Received event: " + json.dumps(event, indent=None))
 
-    bucket = event['Records'][0]['s3']['bucket']['name']
-    key = urllib.parse.unquote_plus(event['Records'][0]['s3']['object']['key'], encoding='utf-8')
+    if 'detail' in event:
+        request = event['detail']
+    else:
+        request = event['Records'][0]['s3']
+
+    bucket = request['bucket']['name']
+    key = urllib.parse.unquote_plus(request['object']['key'], encoding='utf-8')
     log.info(f"Received key: {key}")
     if "report.csv" not in key:
         eb_response = eb.put_events(
