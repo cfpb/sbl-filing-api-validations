@@ -24,7 +24,8 @@ def watch_queue():
             VisibilityTimeout=1200,
             WaitTimeSeconds=20,
         )
-
+        logger.info(f"Received SQS event {response}")
+        print(f"Received SQS event {response}", flush=True)
         if response and 'Messages' in response:
             receipt = response['Messages'][0]['ReceiptHandle']
             event = json.loads(response['Messages'][0]['Body'])

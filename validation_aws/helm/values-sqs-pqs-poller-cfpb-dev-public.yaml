@@ -24,6 +24,7 @@ configmap:
     DB_SECRET: cfpb/team/regtech/rds/postgres/regtech-sbl-prototype/databases/filing_db/filing_user-credentials
     DB_PERSIST: "true"
     JOB_IMAGE: "099248080076.dkr.ecr.us-east-1.amazonaws.com/cfpb/regtech/sqs-validator-job:latest"
+    EVENT_BUS: ja-event-bus
 
 volumes:
 - name: sqs-pqs-poller-secrets

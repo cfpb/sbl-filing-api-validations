@@ -21,6 +21,7 @@ configmap:
   name: sqs-csv-poller
   data:
     QUEUE_URL: https://sqs.us-east-1.amazonaws.com/099248080076/cfpb-regtech-dev-s3-queue-test
+    EVENT_BUS: ja-event-bus
 
 volumes:
 - name: sqs-csv-poller-secrets

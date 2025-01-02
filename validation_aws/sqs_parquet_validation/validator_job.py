@@ -8,19 +8,28 @@ from sbl_validation_processor.parquet_validator import validate_parquets
 
 logger = logging.getLogger()
 
+def fire_validation_done(response):
+    key = response["Records"][0]["s3"]["object"]["key"]
+    bucket = response["Records"][0]["s3"]["bucket"]["name"]
+    eb = boto3.client('events')
+    eb_response = eb.put_events(
+        Entries=[
+            {
+                'Detail': json.dumps(response),
+                'DetailType': 'parquet_validator',
+                'EventBusName': os.getenv('EVENT_BUS', 'default'),
+                'Source': 'parquet_validator',
+            }
+        ]
+    )
+
 def do_validation(bucket: str, key: str):
-    validate_parquets(bucket, key)
+    validation_response = validate_parquets(bucket, key)
 
     paths = [p for p in key.split("/") if p]
     sub_id = paths[-1].split("_")[0]
 
-    s3 = boto3.client("s3")
-    r = s3.put_object(
-        Bucket=bucket,
-        Key="/".join(paths[:-1]) + f"/{sub_id}.done_res",
-        Body=f"{sub_id} parquet validation done".encode("utf-8"),
-    )
-
+    fire_validation_done(validation_response)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Parquet Validator Job")

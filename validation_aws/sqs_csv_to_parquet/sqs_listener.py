@@ -8,6 +8,20 @@ from sbl_validation_processor.csv_to_parquet import split_csv_into_parquet
 logger = logging.getLogger()
 logger.setLevel("INFO")
 
+def fire_parquet_done(response):
+    key = response["Records"][0]["s3"]["object"]["key"]
+    bucket = response["Records"][0]["s3"]["bucket"]["name"]
+    eb = boto3.client('events')
+    eb_response = eb.put_events(
+        Entries=[
+            {
+                'Detail': json.dumps(response),
+                'DetailType': 'csv_to_parquet',
+                'EventBusName': os.getenv('EVENT_BUS', 'default'),
+                'Source': 'csv_to_parquet',
+            }
+        ]
+    )
 
 def watch_queue():
     region_name = "us-east-1"
@@ -24,7 +38,8 @@ def watch_queue():
             VisibilityTimeout=1200,
             WaitTimeSeconds=20,
         )
-
+        logger.info(f"Received SQS event {response}")
+        print(f"Received SQS event {response}", flush=True)
         if response and 'Messages' in response:
             receipt = response['Messages'][0]['ReceiptHandle']
             event = json.loads(response['Messages'][0]['Body'])
@@ -35,15 +50,8 @@ def watch_queue():
                     logger.info(f"Received Event from Bucket {bucket}, File {key}")
                     print(f"Received Event from Bucket {bucket}, File {key}", flush=True)
                     if "report.csv" not in key:
-                        split_csv_into_parquet(bucket, key)
-                        paths = key.split('/')
-                        fname = paths[-1]
-                        s3 = boto3.client("s3")
-                        r = s3.put_object(
-                            Bucket=bucket,
-                            Key="/".join(paths[:-1]) + f"/{fname.split(".")[0]}.done_pqs",
-                            Body=f"{fname} to parquet done".encode("utf-8"),
-                        )
+                        split_response = split_csv_into_parquet(bucket, key)
+                        fire_parquet_done(split_response)
                     else:
                         logger.warn("not processing report.csv: %s", key)
 

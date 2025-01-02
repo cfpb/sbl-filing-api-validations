@@ -11,7 +11,6 @@ from sbl_validation_processor.parquet_validator import validate_parquets
 logger = logging.getLogger()
 logger.setLevel("INFO")
 
-
 def watch_queue():
     region_name = "us-east-1"
 
@@ -27,7 +26,8 @@ def watch_queue():
             VisibilityTimeout=1200,
             WaitTimeSeconds=20,
         )
-
+        logger.info(f"Received SQS event {response}")
+        print(f"Received SQS event {response}", flush=True)
         if response and 'Messages' in response:
             receipt = response['Messages'][0]['ReceiptHandle']
             event = json.loads(response['Messages'][0]['Body'])
@@ -42,7 +42,7 @@ def watch_queue():
                     sub_id = paths[-1].split(".")[0]
                     key = "/".join(paths[:-1]) + f"/{sub_id}_pqs/"
 
-
+                    
                     fire_k8s_job(bucket, key, f"{sub_id}-{paths[-2]}-{paths[-3]}")
 
 
