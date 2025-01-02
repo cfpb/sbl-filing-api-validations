@@ -22,6 +22,7 @@ configmap:
   data:
     QUEUE_URL: https://sqs.us-east-1.amazonaws.com/099248080076/cfpb-regtech-dev-res-aggregate
     DB_SECRET: cfpb/team/regtech/rds/postgres/regtech-sbl-prototype/databases/filing_db/filing_user-credentials
+    JOB_IMAGE: "099248080076.dkr.ecr.us-east-1.amazonaws.com/cfpb/regtech/sqs-aggregator-job:latest"
 
 volumes:
 - name: sqs-res-poller-secrets

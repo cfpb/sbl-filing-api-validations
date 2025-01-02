@@ -6,8 +6,6 @@ import logging
 from datetime import datetime
 from kubernetes import client, config
 
-from sbl_validation_processor.parquet_validator import validate_parquets
-
 logger = logging.getLogger()
 logger.setLevel("INFO")
 
@@ -69,7 +67,7 @@ def fire_k8s_job(bucket: str, key: str, job_id: str):
                         client.V1Container(
                             name=f"validator-job-{timestamp}",
                             image=os.getenv("JOB_IMAGE"),
-                            command=["python","validator_job.py"],
+                            command=["python","job.py"],
                             args=["--bucket", bucket, "--key", key],
                         )
                     ],
