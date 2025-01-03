@@ -53,7 +53,7 @@ def write_report(report_data: BytesIO, bucket: str, report_file: str):
         s3 = boto3.client('s3')
         s3.put_object(Body=report_data, Bucket=bucket, Key=report_file)
 
-def aggregate_validation_results(bucket, key):
+def aggregate_validation_results(bucket, key, results):
     file_paths = [path for path in key.split('/') if path]
     file_name = file_paths[-1]
     period = file_paths[-3]
@@ -90,83 +90,50 @@ def aggregate_validation_results(bucket, key):
             
             #get the real total count of errors and warnings before truncating based on max error length
             df = lf.collect()
-            error_counts, warning_counts = get_scope_counts(df)
+            error_counts, warning_counts = get_error_and_warning_totals(results)
             #slice is start indice inclusive, so 0 to max_errors will return 1000000 errors (0-999999) if the 
             #max_errors is 1000000 and there are more than that.  Adding +1 actually returns 
             #max_errors + 1 which would be one more than the max_errors intended
             final_df = df.slice(0, max_errors)
             
             #build report csv and push to S3
-            csv_content = df_to_download(final_df, warning_counts.total_count, error_counts.total_count, max_errors)
+            csv_content = df_to_download(final_df, warning_counts, error_counts, max_errors)
             write_report(csv_content, bucket, validation_report_path)
 
             #truncate the final_df again for the json validation results we send to the frontend
             if not final_df.is_empty():
                 final_df = lf.group_by(pl.col("validation_id")).head(max_group_size).collect()
 
-            validation_results = ValidationResults(
-                error_counts=error_counts,
-                warning_counts=warning_counts,
-                is_valid=((error_counts.total_count + warning_counts.total_count) == 0),
-                findings=final_df,
-                phase=final_df.select(pl.first("phase")).item() if not final_df.is_empty() else ValidationPhase.LOGICAL,
-            )
-
-            if validation_results.is_valid:
+            if error_counts + warning_counts == 0:
                 final_state = SubmissionState.VALIDATION_SUCCESSFUL
             else:
                 final_state = (
                     SubmissionState.VALIDATION_WITH_ERRORS
-                    if validation_results.error_counts.total_count != 0
+                    if error_counts != 0
                     else SubmissionState.VALIDATION_WITH_WARNINGS
                 )
             
-            validation_res = build_validation_results(final_df, [validation_results], validation_results.phase)
+            build_validation_results(final_df, results)
             submission.state = final_state
-            submission.validation_results = validation_res
+            submission.validation_results = results
             db_session.commit()
 
-def build_validation_results(final_df: pl.DataFrame, results: list[ValidationResults], final_phase: ValidationPhase):
-    val_json = df_to_dicts(final_df, int(os.getenv("MAX_RECORDS", 1000000)), int(os.getenv("MAX_GROUP_SIZE", 200)))
-    if final_phase == ValidationPhase.SYNTACTICAL:
-        syntax_error_counts = sum([r.error_counts.single_field_count for r in results])
-        val_res = {
-            "syntax_errors": {
-                "single_field_count": syntax_error_counts,
-                "multi_field_count": 0,  # this will always be zero for syntax errors
-                "register_count": 0,  # this will always be zero for syntax errors
-                "total_count": syntax_error_counts,
-                "details": val_json,
-            }
-        }
+def get_error_and_warning_totals(results):
+    if results["syntax_errors"]["total_count"] > 0:
+        return results["syntax_errors"]["total_count"], 0 #syntax are only error counts
+    else:
+        return results["logic_errors"]["total_count"], results["logic_warnings"]["total_count"]
+
+def build_validation_results(final_df: pl.DataFrame, results: dict):
+    val_json = df_to_dicts(final_df, max_group_size=int(os.getenv("MAX_GROUP_SIZE", 200)))
+    if results["syntax_errors"]["total_count"] > 0:
+        results["syntax_errors"]["details"] = val_json
     else:
         errors_list = [e for e in val_json if e["validation"]["severity"] == Severity.ERROR]
         warnings_list = [w for w in val_json if w["validation"]["severity"] == Severity.WARNING]
-        val_res = {
-            "syntax_errors": {
-                "single_field_count": 0,
-                "multi_field_count": 0,
-                "register_count": 0,
-                "total_count": 0,
-                "details": [],
-            },
-            "logic_errors": {
-                "single_field_count": sum([r.error_counts.single_field_count for r in results]),
-                "multi_field_count": sum([r.error_counts.multi_field_count for r in results]),
-                "register_count": sum([r.error_counts.register_count for r in results]),
-                "total_count": sum([r.error_counts.total_count for r in results]),
-                "details": errors_list,
-            },
-            "logic_warnings": {
-                "single_field_count": sum([r.warning_counts.single_field_count for r in results]),
-                "multi_field_count": sum([r.warning_counts.multi_field_count for r in results]),
-                "register_count": sum([r.warning_counts.register_count for r in results]),
-                "total_count": sum([r.warning_counts.total_count for r in results]),
-                "details": warnings_list,
-            },
-        }
-
-    return val_res
+        results["syntax_errors"]["details"] = []
+        results["logic_errors"]["details"] = errors_list
+        results["logic_warnings"]["details"] = warnings_list
 
 def get_db_session() -> Session:
     env = os.getenv('ENV', 'S3')

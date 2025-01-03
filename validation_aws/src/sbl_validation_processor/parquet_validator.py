@@ -13,6 +13,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker, Session
 
 from regtech_data_validator.validator import validate_lazy_frame
+from regtech_data_validator.validation_results import ValidationResults, Counts, ValidationPhase
 
 log = logging.getLogger()
 
@@ -66,8 +67,9 @@ def validate_parquets(bucket: str, key: str):
 
     try:
         lf = scan_parquets(bucket, key)
-
+        all_results = []
         for validation_results in validate_lazy_frame(lf, {"lei": lei}, batch_size=batch_size, max_errors=max_errors):
+            all_results.append(validation_results)
             if validation_results.findings.height:
                 buffer = BytesIO()
                 df = validation_results.findings.with_columns(phase=pl.lit(validation_results.phase), submission_id=pl.lit(submission_id))
@@ -82,6 +84,7 @@ def validate_parquets(bucket: str, key: str):
                 buffer.seek(0)
                 write_parquet(buffer, bucket, f"{validation_result_path}{pq_idx:05}.parquet")
                 pq_idx += 1
+        validation_results = combine_results(all_results)
 
         return {
             'statusCode': 200,
@@ -94,14 +97,49 @@ def validate_parquets(bucket: str, key: str):
                         },
                         "object": {
                             "key": validation_result_path
-                        }
-                    }
+                        },
+                    },
+                    "results": validation_results
                 }
             ]
         }
     except Exception as e:
         log.exception('Failed to validate {} in {}'.format(key, bucket))
         raise e
+
+def combine_results(results: [ValidationResults]):
+    if any([True for r in results if r.phase == ValidationPhase.SYNTACTICAL and r.is_valid == False]):
+        syntax_error_counts = sum([r.error_counts.single_field_count for r in results])
+        val_res = {
+            "syntax_errors": {
+                "single_field_count": syntax_error_counts,
+                "multi_field_count": 0,  # this will always be zero for syntax errors
+                "register_count": 0,  # this will always be zero for syntax errors
+                "total_count": syntax_error_counts,
+            }
+        }
+    else:
+        val_res = {
+            "syntax_errors": {
+                "single_field_count": 0,
+                "multi_field_count": 0,
+                "register_count": 0,
+                "total_count": 0,
+            },
+            "logic_errors": {
+                "single_field_count": sum([r.error_counts.single_field_count for r in results]),
+                "multi_field_count": sum([r.error_counts.multi_field_count for r in results]),
+                "register_count": sum([r.error_counts.register_count for r in results]),
+                "total_count": sum([r.error_counts.total_count for r in results]),
+            },
+            "logic_warnings": {
+                "single_field_count": sum([r.warning_counts.single_field_count for r in results]),
+                "multi_field_count": sum([r.warning_counts.multi_field_count for r in results]),
+                "register_count": sum([r.warning_counts.register_count for r in results]),
+                "total_count": sum([r.warning_counts.total_count for r in results]),
+            },
+        }
+    return val_res
     
 def get_db_session():
     SessionLocal = sessionmaker(bind=get_filing_engine())
