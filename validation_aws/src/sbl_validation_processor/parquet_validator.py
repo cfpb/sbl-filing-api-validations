@@ -1,34 +1,53 @@
-import os
-import re
-import io
-import json
-import logging
-import urllib.parse
-import polars as pl
 import boto3
 import boto3.session
-from botocore.exceptions import ClientError
+import os
+import json
+import logging
+import polars as pl
+import re
 
+from io import BytesIO
+from botocore.exceptions import ClientError
 from pydantic import PostgresDsn
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker, Session
+
 from regtech_data_validator.validator import validate_lazy_frame
 
 log = logging.getLogger()
-log.setLevel(logging.INFO)
 
-s3 = boto3.client('s3')
+def scan_parquets(bucket: str, key: str):
+    env = os.getenv('ENV', 'S3')
+    if env == 'LOCAL':
+        return pl.scan_parquet(os.path.join(bucket, key), allow_missing_columns=True)
+    else:
+        session = boto3.session.Session()
+        creds = session.get_credentials()
+        storage_options = {
+            'aws_access_key_id': creds.access_key,
+            'aws_secret_access_key': creds.secret_key,
+            'session_token': creds.token,
+            'aws_region': 'us-east-1',
+        }
+        return pl.scan_parquet(f"s3://{bucket}/{key}", allow_missing_columns=True, storage_options=storage_options)
+        
+def write_parquet(buffer: BytesIO, bucket: str, parquet_file: str):
+    env = os.getenv('ENV', 'S3')
+    if env == 'LOCAL':
+        file_path = os.path.join(bucket, parquet_file)
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        with open(file_path, 'wb') as f:
+            f.write(buffer.getvalue())
+    else:
+        s3 = boto3.client('s3')
+        s3.upload_fileobj(buffer, bucket, parquet_file)
 
-def lambda_handler(event, context):
-    request = event['responsePayload'] if 'responsePayload' in event else event
-
-    bucket = request['Records'][0]['s3']['bucket']['name']
-    key = urllib.parse.unquote_plus(request['Records'][0]['s3']['object']['key'], encoding='utf-8')
-    log.info(f"Received key: {key}")
+def validate_parquets(bucket: str, key: str):
+    print(f"Validating parquets in {bucket}, File {key}", flush=True)
 
     file_paths = [path for path in key.split('/') if path]
     file_name = file_paths[-1]
-    lei = file_paths[2]
+    lei = file_paths[-2]
     sub_id_regex = r"\d+"
     sub_match = re.match(sub_id_regex, file_name)
     submission_id = sub_match.group()
@@ -39,34 +58,29 @@ def lambda_handler(event, context):
     persist_db = bool(json.loads(os.getenv("DB_PERSIST", "false").lower()))
     log.info(f"batch size: {batch_size}")
 
-    session = boto3.session.Session()
-    creds = session.get_credentials()
-    storage_options = {
-        'aws_access_key_id': creds.access_key,
-        'aws_secret_access_key': creds.secret_key,
-        'session_token': creds.token,
-        'aws_region': 'us-east-1',
-    }
-
-    validation_result_path = f"{'/'.join(file_paths[:-1])}/{submission_id}_res/"
+    if root := os.getenv('S3_ROOT'):
+        validation_result_path = f"{root}/{'/'.join(file_paths[1:-1])}/{submission_id}_res/"
+    else:
+        validation_result_path = f"{'/'.join(file_paths[:-1])}/{submission_id}_res/"
+    print(f"Validating result path {validation_result_path}", flush=True)
 
     try:
-        db_session = get_db_session()
-        lf = pl.scan_parquet(f"s3://{bucket}/{key}", allow_missing_columns=True, storage_options=storage_options)
+        lf = scan_parquets(bucket, key)
 
         for validation_results in validate_lazy_frame(lf, {"lei": lei}, batch_size=batch_size, max_errors=max_errors):
             if validation_results.findings.height:
-                buffer = io.BytesIO()
+                buffer = BytesIO()
                 df = validation_results.findings.with_columns(phase=pl.lit(validation_results.phase), submission_id=pl.lit(submission_id))
                 df = df.cast({"phase": pl.String})
                 log.info("findings found for batch {}: {}".format(pq_idx, df.height))
                 if persist_db:
+                    db_session = get_db_session()
                     db_entries = df.write_database(table_name="findings", connection=db_session, if_table_exists="append")
                     db_session.commit()
                     log.info("{} findings persisted to db".format(db_entries))
                 df.write_parquet(buffer)
                 buffer.seek(0)
-                s3.upload_fileobj(buffer, bucket, f"{validation_result_path}{pq_idx:05}.parquet")
+                write_parquet(buffer, bucket, f"{validation_result_path}{pq_idx:05}.parquet")
                 pq_idx += 1
 
         return {
@@ -95,13 +109,25 @@ def get_db_session():
     return session
 
 def get_filing_engine():
-    secret = get_secret(os.getenv("DB_SECRET", None))
+    env = os.getenv('ENV', 'S3')
+    if env == 'LOCAL':
+        user=os.getenv("DB_USER")
+        passwd=os.getenv("DB_PWD")
+        host=os.getenv("DB_HOST")
+        db=os.getenv("DB_NAME")
+    else:
+        secret = get_secret(os.getenv("DB_SECRET", None))
+        user=secret['username']
+        passwd=secret['password']
+        host=secret['host']
+        db=secret['database']
+
     postgres_dsn = PostgresDsn.build(
         scheme="postgresql+psycopg2",
-        username=secret['username'],
-        password=urllib.parse.quote(secret['password'], safe=""),
-        host=secret['host'],
-        path=secret['database'],
+        username=user,
+        password=urllib.parse.quote(passwd, safe=""),
+        host=host,
+        path=db,
     )
     conn_str = str(postgres_dsn)
     return create_engine(conn_str)

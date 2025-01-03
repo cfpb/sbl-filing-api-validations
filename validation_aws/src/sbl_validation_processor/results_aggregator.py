@@ -8,43 +8,64 @@ import boto3
 import boto3.session
 from botocore.exceptions import ClientError
 
+from io import BytesIO
 from pydantic import PostgresDsn
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, scoped_session, sessionmaker
 from sbl_filing_api.entities.models.dao import SubmissionDAO, SubmissionState, FilingDAO
-from regtech_data_validator.validator import get_scope_counts, ValidationPhase, ValidationResults, ValidationPhase
+from regtech_data_validator.validator import get_scope_counts, ValidationPhase, ValidationResults
 from regtech_data_validator.data_formatters import df_to_dicts, df_to_download
 from regtech_data_validator.checks import Severity
 
 log = logging.getLogger()
-log.setLevel(logging.INFO)
 
-s3 = boto3.client('s3')
+def get_parquet_paths(bucket: str, key: str):
+    env = os.getenv('ENV', 'S3')
+    if env == 'LOCAL':
+        dir_path = os.path.join(bucket, key)
+        if not os.path.isdir(dir_path):
+            return [], {}
+        return [
+            os.path.join(dir_path, file) for file in os.listdir(dir_path) if file.endswith(".parquet")
+        ], {}
+    else:
+        aws_session = boto3.session.Session()
+        creds = aws_session.get_credentials()
+        storage_options = {
+            'aws_access_key_id': creds.access_key,
+            'aws_secret_access_key': creds.secret_key,
+            'session_token': creds.token,
+            'aws_region': 'us-east-1',
+        }
 
-def lambda_handler(event, context):
-    request = event['responsePayload'] if 'responsePayload' in event else event
+        s3 = boto3.client('s3')
+        s3_objs = s3.list_objects_v2(Bucket=bucket, Prefix=key)
+        return [f"s3://{bucket}/{obj['Key']}" for obj in s3_objs.get('Contents', []) if obj['Key'].endswith(".parquet")], storage_options
 
-    bucket = request['Records'][0]['s3']['bucket']['name']
-    key = urllib.parse.unquote_plus(request['Records'][0]['s3']['object']['key'], encoding='utf-8')
-    log.info(f"Received key: {key}")
+def write_report(report_data: BytesIO, bucket: str, report_file: str):
+    env = os.getenv('ENV', 'S3')
+    if env == 'LOCAL':
+        file_path = os.path.join(bucket, report_file)
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        with open(file_path, 'wb') as f:
+            f.write(report_data)
+    else:
+        s3 = boto3.client('s3')
+        s3.put_object(Body=report_data, Bucket=bucket, Key=report_file)
 
-    try:
-        aggregate_validation_result(bucket, key)
-    except Exception as e:
-        log.exception('Failed to validate {} in {}'.format(key, bucket))
-        raise e
-
-def aggregate_validation_result(bucket, key):
-
+def aggregate_validation_results(bucket, key):
     file_paths = [path for path in key.split('/') if path]
     file_name = file_paths[-1]
-    period = file_paths[1]
-    lei = file_paths[2]
+    period = file_paths[-3]
+    lei = file_paths[-2]
     sub_id_regex = r"\d+"
     sub_match = re.match(sub_id_regex, file_name)
     sub_counter = int(sub_match.group())
 
-    validation_report_path = f"{'/'.join(file_paths[:-1])}/{sub_counter}_report.csv"
+    if root := os.getenv('S3_ROOT'):
+        validation_report_path = f"{root}/{'/'.join(file_paths[1:-1])}/{sub_counter}_report.csv"
+    else:
+        validation_report_path = f"{'/'.join(file_paths[:-1])}/{sub_counter}_report.csv"
 
     with get_db_session() as db_session:
         submission = (
@@ -56,40 +77,47 @@ def aggregate_validation_result(bucket, key):
         max_group_size = os.getenv("MAX_GROUP_SIZE", 200)
 
         if submission and submission.state not in [SubmissionState.SUBMISSION_ACCEPTED, SubmissionState.VALIDATION_EXPIRED, SubmissionState.SUBMISSION_UPLOAD_MALFORMED]:
-            aws_session = boto3.session.Session()
-            creds = aws_session.get_credentials()
-            storage_options = {
-                'aws_access_key_id': creds.access_key,
-                'aws_secret_access_key': creds.secret_key,
-                'session_token': creds.token,
-                'aws_region': 'us-east-1',
-            }
-            lf = pl.scan_parquet(f"s3://{bucket}/{key}", allow_missing_columns=True, storage_options=storage_options)
-            max_err_lf = lf.slice(0, max_errors + 1)
-            df = max_err_lf.collect()
-            error_counts, warning_counts = get_scope_counts(df)
-            csv_df = pl.concat([df], how="diagonal")
-            csv_content = df_to_download(csv_df, warning_counts.total_count, error_counts.total_count, max_errors)
-            s3.put_object(Body=csv_content, Bucket=bucket, Key=validation_report_path)
 
-            df = max_err_lf.group_by(pl.col("validation_id")).head(max_group_size).collect()
+            file_paths, storage_options = get_parquet_paths(bucket, key)
+
+            #scan each result parquet into a lazyframe then diagonally concat so all columns are merged into the final lf.  Otherwise
+            #this will error if trying to scan a parquet directory and the parquets don't contain the same columns (particularly the
+            #field/value columns)
+            lazyframes = [pl.scan_parquet(file, allow_missing_columns=True, storage_options=storage_options) for file in file_paths]
+            lf = pl.LazyFrame()
+            if lazyframes:
+                lf = pl.concat(lazyframes, how="diagonal")
+            
+            #get the real total count of errors and warnings before truncating based on max error length
+            df = lf.collect()
+            error_counts, warning_counts = get_scope_counts(df)
+            #slice is start indice inclusive, so 0 to max_errors will return 1000000 errors (0-999999) if the 
+            #max_errors is 1000000 and there are more than that.  Adding +1 actually returns 
+            #max_errors + 1 which would be one more than the max_errors intended
+            final_df = df.slice(0, max_errors)
+            
+            #build report csv and push to S3
+            csv_content = df_to_download(final_df, warning_counts.total_count, error_counts.total_count, max_errors)
+            write_report(csv_content, bucket, validation_report_path)
+
+            #truncate the final_df again for the json validation results we send to the frontend
+            if not final_df.is_empty():
+                final_df = lf.group_by(pl.col("validation_id")).head(max_group_size).collect()
 
             validation_results = ValidationResults(
                 error_counts=error_counts,
                 warning_counts=warning_counts,
                 is_valid=((error_counts.total_count + warning_counts.total_count) == 0),
-                findings=df,
-                phase=df.select(pl.first("phase")).item(),
+                findings=final_df,
+                phase=final_df.select(pl.first("phase")).item() if not final_df.is_empty() else ValidationPhase.LOGICAL,
             )
 
-            final_df = pl.concat([df], how="diagonal")
-
-            if final_df.is_empty():
+            if validation_results.is_valid:
                 final_state = SubmissionState.VALIDATION_SUCCESSFUL
             else:
                 final_state = (
                     SubmissionState.VALIDATION_WITH_ERRORS
-                    if lf.filter(pl.col('validation_type') == 'Error').collect().height > 0
+                    if validation_results.error_counts.total_count != 0
                     else SubmissionState.VALIDATION_WITH_WARNINGS
                 )
             
@@ -141,13 +169,25 @@ def build_validation_results(final_df: pl.DataFrame, results: list[ValidationRes
     return val_res
 
 def get_db_session() -> Session:
-    secret = get_secret(os.getenv("DB_SECRET", None))
+    env = os.getenv('ENV', 'S3')
+    if env == 'LOCAL':
+        user=os.getenv("DB_USER")
+        passwd=os.getenv("DB_PWD")
+        host=os.getenv("DB_HOST")
+        db=os.getenv("DB_NAME")
+    else:
+        secret = get_secret(os.getenv("DB_SECRET", None))
+        user=secret['username']
+        passwd=secret['password']
+        host=secret['host']
+        db=secret['database']
+
     postgres_dsn = PostgresDsn.build(
         scheme="postgresql+psycopg2",
-        username=secret['username'],
-        password=urllib.parse.quote(secret['password'], safe=""),
-        host=secret['host'],
-        path=secret['database'],
+        username=user,
+        password=urllib.parse.quote(passwd, safe=""),
+        host=host,
+        path=db,
     )
     engine = create_engine(
         postgres_dsn.unicode_string(),
