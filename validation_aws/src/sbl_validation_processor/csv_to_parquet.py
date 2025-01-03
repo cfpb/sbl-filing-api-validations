@@ -34,7 +34,10 @@ def split_csv_into_parquet(bucket: str, key: str):
         paths = key.split('/')
         fname = paths[-1]
         fprefix = '.'.join(fname.split('.')[:-1])
-        res_folder = f"{'/'.join(paths[:-1])}/{fprefix}_pqs/"
+        if root := os.getenv('S3_ROOT'):
+            res_folder = f"{root}/{'/'.join(paths[1:-1])}/{fprefix}_pqs/"
+        else:
+            res_folder = f"{'/'.join(paths[:-1])}/{fprefix}_pqs/"
 
         csv_data = get_csv_data(bucket, key)
 

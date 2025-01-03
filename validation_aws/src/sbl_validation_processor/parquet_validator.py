@@ -58,7 +58,10 @@ def validate_parquets(bucket: str, key: str):
     persist_db = bool(json.loads(os.getenv("DB_PERSIST", "false").lower()))
     log.info(f"batch size: {batch_size}")
 
-    validation_result_path = f"{'/'.join(file_paths[:-1])}/{submission_id}_res/"
+    if root := os.getenv('S3_ROOT'):
+        validation_result_path = f"{root}/{'/'.join(file_paths[1:-1])}/{submission_id}_res/"
+    else:
+        validation_result_path = f"{'/'.join(file_paths[:-1])}/{submission_id}_res/"
     print(f"Validating result path {validation_result_path}", flush=True)
 
     try:
