@@ -9,8 +9,6 @@ from sbl_validation_processor.parquet_validator import validate_parquets
 logger = logging.getLogger()
 
 def fire_validation_done(response):
-    key = response["Records"][0]["s3"]["object"]["key"]
-    bucket = response["Records"][0]["s3"]["bucket"]["name"]
     eb = boto3.client('events')
     eb_response = eb.put_events(
         Entries=[
@@ -25,7 +23,7 @@ def fire_validation_done(response):
 
 def do_validation(bucket: str, key: str):
     validation_response = validate_parquets(bucket, key)
-
+    print(f"Validation response: {validation_response}", flush=True)
     paths = [p for p in key.split("/") if p]
     sub_id = paths[-1].split("_")[0]
 
