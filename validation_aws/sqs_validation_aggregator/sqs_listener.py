@@ -34,12 +34,13 @@ def watch_queue():
                 try:
                     bucket = event['detail']['Records'][0]['s3']['bucket']['name']
                     key = event['detail']['Records'][0]['s3']['object']['key']
+                    results = event['detail']['Records'][0]['results']
                     logger.info(f"Received Event from Bucket {bucket}, File {key}")
                     print(f"Received Event from Bucket {bucket}, File {key}", flush=True)
 
                     paths = key.split('/')
                     sub_id = paths[-1].split("_res")[0]
-                    fire_k8s_job(bucket, key, f"{sub_id}-{paths[-2]}-{paths[-3]}")
+                    fire_k8s_job(bucket, key, results, f"{sub_id}-{paths[-2]}-{paths[-3]}")
 
                     # delete message after successfully processing the file
                     response = sqs.delete_message(QueueUrl=os.getenv("QUEUE_URL", None), ReceiptHandle=receipt)
@@ -51,7 +52,7 @@ def watch_queue():
                 response = sqs.delete_message(QueueUrl=os.getenv("QUEUE_URL", None), ReceiptHandle=receipt)
 
 
-def fire_k8s_job(bucket: str, key: str, job_id: str):
+def fire_k8s_job(bucket: str, key: str, results: dict, job_id: str):
     config.load_incluster_config()
     batch_v1 = client.BatchV1Api()
     timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
@@ -65,7 +66,7 @@ def fire_k8s_job(bucket: str, key: str, job_id: str):
                             name=f"aggregator-job-{timestamp}",
                             image=os.getenv("JOB_IMAGE"),
                             command=["python","job.py"],
-                            args=["--bucket", bucket, "--key", key],
+                            args=["--bucket", bucket, "--key", key, "--results", json.dumps(results)],
                             env=[client.V1EnvVar(name="DB_SECRET", value=os.getenv("DB_SECRET"))]
                         )
                     ],
