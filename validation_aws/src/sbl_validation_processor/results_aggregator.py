@@ -89,12 +89,11 @@ def aggregate_validation_results(bucket, key, results):
                 lf = pl.concat(lazyframes, how="diagonal")
             
             #get the real total count of errors and warnings before truncating based on max error length
-            df = lf.collect()
             error_counts, warning_counts = get_error_and_warning_totals(results)
             #slice is start indice inclusive, so 0 to max_errors will return 1000000 errors (0-999999) if the 
             #max_errors is 1000000 and there are more than that.  Adding +1 actually returns 
             #max_errors + 1 which would be one more than the max_errors intended
-            final_df = df.slice(0, max_errors)
+            final_df = lf.slice(0, max_errors).collect()
             
             #build report csv and push to S3
             csv_content = df_to_download(final_df, warning_counts, error_counts, max_errors)
