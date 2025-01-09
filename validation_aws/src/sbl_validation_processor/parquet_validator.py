@@ -1,3 +1,4 @@
+from typing import List
 import boto3
 import boto3.session
 import os
@@ -108,7 +109,7 @@ def validate_parquets(bucket: str, key: str):
         log.exception('Failed to validate {} in {}'.format(key, bucket))
         raise e
 
-def combine_results(results: [ValidationResults]):
+def combine_results(results: List[ValidationResults]):
     if any([True for r in results if r.phase == ValidationPhase.SYNTACTICAL and r.is_valid == False]):
         syntax_error_counts = sum([r.error_counts.single_field_count for r in results])
         val_res = {
