@@ -5,6 +5,7 @@ import json
 import logging
 import polars as pl
 import re
+import urllib.parse
 
 from io import BytesIO
 from botocore.exceptions import ClientError
