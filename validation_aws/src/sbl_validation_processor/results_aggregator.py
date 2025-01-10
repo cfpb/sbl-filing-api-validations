@@ -19,6 +19,7 @@ from regtech_data_validator.validator import get_scope_counts, ValidationPhase, 
 from regtech_data_validator.data_formatters import df_to_dicts, df_to_download
 from regtech_data_validator.checks import Severity
 
+logging.basicConfig()
 log = logging.getLogger()
 log.setLevel(logging.INFO)
 
@@ -159,7 +160,7 @@ def aggregate_validation_results(bucket, key, results):
                 print(f"test gc collect: {gc.collect()}")
             
             csv_content = df_to_download(final_df, warning_counts, error_counts, max_errors)
-            print("got content buffer ok")
+            log.info("got content buffer ok")
             write_report(csv_content, bucket, validation_report_path)
 
             if force_gc:
