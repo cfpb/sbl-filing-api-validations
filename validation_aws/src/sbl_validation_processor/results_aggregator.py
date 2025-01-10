@@ -175,16 +175,16 @@ def aggregate_validation_results(bucket, key, results):
 
                 lf_to_use = max_err_lf if use_max_err_lf else lf
 
-                val_ids = lf_to_use.select("validation_id").unique().collect()
+                validation_groups = lf_to_use.select("validation_id").unique().collect()
 
-                validation_groups = []
+                validation_group_results = []
 
-                for row in val_ids.iter_rows(named=True):
-                    validation_group = lf.filter(pl.col("validation_id") == row["validation_id"]).head(max_group_size).collect()
-                    validation_groups.append(validation_group)
+                for validation_id in validation_groups["validation_id"]:
+                    validation_group_result = lf.filter(pl.col("validation_id") == validation_id).head(max_group_size).collect()
+                    validation_group_results.append(validation_group_result)
                     log.info(f"validation groups iter mem: {process.memory_info().rss / mb_factor} MB")
 
-                final_df = pl.concat(validation_groups, how="diagonal")
+                final_df = pl.concat(validation_group_results, how="diagonal")
                 log.info(f"mem after json lf collect with using truncated lf? {use_max_err_lf}: {process.memory_info().rss / mb_factor} MB")
 
             if error_counts + warning_counts == 0:
