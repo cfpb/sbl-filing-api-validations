@@ -19,6 +19,7 @@ from regtech_data_validator.validation_results import ValidationResults, Validat
 
 import psutil
 
+logging.basicConfig()
 log = logging.getLogger()
 log.setLevel(logging.INFO)
 
