@@ -11,13 +11,16 @@ import urllib.parse
 from io import BytesIO
 from botocore.exceptions import ClientError
 from pydantic import PostgresDsn
-from sqlalchemy import create_engine, func, select
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from regtech_data_validator.validator import validate_lazy_frame
-from regtech_data_validator.validation_results import ValidationResults, Counts, ValidationPhase
+from regtech_data_validator.validation_results import ValidationResults, ValidationPhase
+
+import psutil
 
 log = logging.getLogger()
+log.setLevel(logging.INFO)
 
 def scan_parquets(bucket: str, key: str):
     env = os.getenv('ENV', 'S3')
@@ -61,6 +64,9 @@ def validate_parquets(bucket: str, key: str):
     persist_db = bool(json.loads(os.getenv("DB_PERSIST", "false").lower()))
     log.info(f"batch size: {batch_size}")
 
+    process = psutil.Process()
+    mb_factor = 1024 ** 2
+
     if root := os.getenv('S3_ROOT'):
         validation_result_path = f"{root}/{'/'.join(file_paths[1:-1])}/{submission_id}_res/"
     else:
@@ -70,8 +76,9 @@ def validate_parquets(bucket: str, key: str):
     try:
         lf = scan_parquets(bucket, key)
         all_results = []
+        log.info(f"mem before validation: {process.memory_info().rss / mb_factor} MB")
+
         for validation_results in validate_lazy_frame(lf, {"lei": lei}, batch_size=batch_size, max_errors=max_errors):
-            all_results.append(validation_results)
             if validation_results.findings.height:
                 buffer = BytesIO()
                 df = validation_results.findings.with_columns(phase=pl.lit(validation_results.phase), submission_id=pl.lit(submission_id))
@@ -86,7 +93,15 @@ def validate_parquets(bucket: str, key: str):
                 buffer.seek(0)
                 write_parquet(buffer, bucket, f"{validation_result_path}{pq_idx:05}.parquet")
                 pq_idx += 1
+            validation_results.findings = None
+            all_results.append(validation_results)
+            log.info(f"validation iter mem: {process.memory_info().rss / mb_factor} MB")
+        
+        log.info(f"mem after validation: {process.memory_info().rss / mb_factor} MB")
+            
         validation_results = combine_results(all_results)
+        
+        log.info(f"mem after combine results: {process.memory_info().rss / mb_factor} MB")
 
         return {
             'statusCode': 200,

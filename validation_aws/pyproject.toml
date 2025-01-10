@@ -17,6 +17,7 @@ pandas = "^2.2.3"
 pyarrow = "^18.0.0"
 kubernetes = "^31.0.0"
 watchdog = "^6.0.0"
+psutil = "^6.1.1"
 
 
 [build-system]

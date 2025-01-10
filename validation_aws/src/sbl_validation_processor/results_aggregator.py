@@ -6,9 +6,11 @@ import urllib.parse
 import polars as pl
 import boto3
 import boto3.session
+import gc
 from botocore.exceptions import ClientError
 
 from io import BytesIO
+import psutil
 from pydantic import PostgresDsn
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, scoped_session, sessionmaker
@@ -18,6 +20,7 @@ from regtech_data_validator.data_formatters import df_to_dicts, df_to_download
 from regtech_data_validator.checks import Severity
 
 log = logging.getLogger()
+log.setLevel(logging.INFO)
 
 def get_parquet_paths(bucket: str, key: str):
     env = os.getenv('ENV', 'S3')
@@ -52,6 +55,53 @@ def write_report(report_data: BytesIO, bucket: str, report_file: str):
     else:
         s3 = boto3.client('s3')
         s3.put_object(Body=report_data, Bucket=bucket, Key=report_file)
+        log.info("completed report upload")
+
+        # part_size = int(os.getenv('UPLOAD_PART_SIZE', str(1024 * 1024 * 50)))
+        # multipart = s3.create_multipart_upload(
+        #     Bucket=bucket,
+        #     Key=report_file,
+        # )
+
+        # upload_id = multipart["UploadId"]
+
+        # log.info(f"upload_id: {upload_id}")
+        # part = 1
+
+        # parts = []
+
+        # while bytes := report_data.read(part_size):
+        #     response = s3.upload_part(
+        #         Body=bytes,
+        #         Bucket=bucket,
+        #         Key=report_file,
+        #         PartNumber=part,
+        #         UploadId=upload_id,
+        #     )
+
+        #     del bytes
+        #     gc.collect()
+
+        #     parts.append({
+        #         'ETag': response['ETag'],
+        #         'PartNumber': part
+        #     })
+
+        #     log.info(f"finished uploading part: {part}")
+
+        #     part += 1
+
+        # response = s3.complete_multipart_upload(
+        #     Bucket=bucket,
+        #     Key=report_file,
+        #     MultipartUpload={
+        #         'Parts': parts,
+        #     },
+        #     UploadId=upload_id,
+        # )
+        # log.info("completed multi-part upload")
+        # log.info(response)
+
 
 def aggregate_validation_results(bucket, key, results):
     file_paths = [path for path in key.split('/') if path]
@@ -61,6 +111,9 @@ def aggregate_validation_results(bucket, key, results):
     sub_id_regex = r"\d+"
     sub_match = re.match(sub_id_regex, file_name)
     sub_counter = int(sub_match.group())
+
+    process = psutil.Process()
+    mb_factor = 1024 ** 2
 
     if root := os.getenv('S3_ROOT'):
         validation_report_path = f"{root}/{'/'.join(file_paths[1:-1])}/{sub_counter}_report.csv"
@@ -73,8 +126,8 @@ def aggregate_validation_results(bucket, key, results):
                 .where(SubmissionDAO.filing == FilingDAO.id, FilingDAO.lei == lei, FilingDAO.filing_period == period, SubmissionDAO.counter == sub_counter)
         ).one()
 
-        max_errors = os.getenv("MAX_ERRORS", 1000000)
-        max_group_size = os.getenv("MAX_GROUP_SIZE", 200)
+        max_errors = int(os.getenv("MAX_ERRORS", 1000000))
+        max_group_size = int(os.getenv("MAX_GROUP_SIZE", 200))
 
         if submission and submission.state not in [SubmissionState.SUBMISSION_ACCEPTED, SubmissionState.VALIDATION_EXPIRED, SubmissionState.SUBMISSION_UPLOAD_MALFORMED]:
 
@@ -93,15 +146,33 @@ def aggregate_validation_results(bucket, key, results):
             #slice is start indice inclusive, so 0 to max_errors will return 1000000 errors (0-999999) if the 
             #max_errors is 1000000 and there are more than that.  Adding +1 actually returns 
             #max_errors + 1 which would be one more than the max_errors intended
-            final_df = lf.slice(0, max_errors).collect()
+            log.info(f"mem before lf collect: {process.memory_info().rss / mb_factor} MB")
+            max_err_lf = lf.slice(0, max_errors)
+            final_df = max_err_lf.collect()
+            log.info(f"mem after lf collect: {process.memory_info().rss / mb_factor} MB")
             
             #build report csv and push to S3
+
+            force_gc = bool(json.loads(os.getenv("FORCE_GC", "false").lower()))
+
+            if force_gc:
+                print(f"test gc collect: {gc.collect()}")
+            
             csv_content = df_to_download(final_df, warning_counts, error_counts, max_errors)
+            print("got content buffer ok")
             write_report(csv_content, bucket, validation_report_path)
+
+            if force_gc:
+                del csv_content
+                print(f"test gc collect 2: {gc.collect()}")
 
             #truncate the final_df again for the json validation results we send to the frontend
             if not final_df.is_empty():
-                final_df = lf.group_by(pl.col("validation_id")).head(max_group_size).collect()
+                use_max_err_lf = bool(json.loads(os.getenv("USE_MAX_ERR_LF", "true").lower()))
+
+                log.info(f"mem before json lf collect with using truncated lf? {use_max_err_lf}: {process.memory_info().rss / mb_factor} MB")
+                final_df = (max_err_lf if use_max_err_lf else lf).group_by(pl.col("validation_id")).head(max_group_size).collect()
+                log.info(f"mem after json lf collect with using truncated lf? {use_max_err_lf}: {process.memory_info().rss / mb_factor} MB")
 
             if error_counts + warning_counts == 0:
                 final_state = SubmissionState.VALIDATION_SUCCESSFUL
