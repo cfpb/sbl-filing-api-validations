@@ -2,7 +2,9 @@ import os
 import re
 import json
 import logging
+from typing import Dict, List
 import urllib.parse
+from warnings import deprecated
 import polars as pl
 import boto3
 import boto3.session
@@ -177,14 +179,19 @@ def aggregate_validation_results(bucket, key, results):
 
                 validation_groups = lf_to_use.select("validation_id").unique().collect()
 
+                log.info(f"total validation groups: {validation_groups.height}")
+
                 validation_group_results = []
 
                 for validation_id in validation_groups["validation_id"]:
+                    log.info(f"valiation_id: {validation_id}")
+                    
                     validation_group_result = lf.filter(pl.col("validation_id") == validation_id).head(max_group_size).collect()
-                    validation_group_results.append(validation_group_result)
+                    log.info(f"validation_results: {validation_group_result.height}")
+
+                    validation_group_results.extend(df_to_dicts(validation_group_result))
                     log.info(f"validation groups iter mem: {process.memory_info().rss / mb_factor} MB")
 
-                final_df = pl.concat(validation_group_results, how="diagonal")
                 log.info(f"mem after json lf collect with using truncated lf? {use_max_err_lf}: {process.memory_info().rss / mb_factor} MB")
 
             if error_counts + warning_counts == 0:
@@ -196,7 +203,7 @@ def aggregate_validation_results(bucket, key, results):
                     else SubmissionState.VALIDATION_WITH_WARNINGS
                 )
             
-            build_validation_results(final_df, results)
+            build_final_json(validation_group_results, results)
             submission.state = final_state
             submission.validation_results = results
             db_session.commit()
@@ -207,6 +214,18 @@ def get_error_and_warning_totals(results):
     else:
         return results["logic_errors"]["total_count"], results["logic_warnings"]["total_count"]
 
+def build_final_json(val_json: List[Dict], results: Dict):
+    if results["syntax_errors"]["total_count"] > 0:
+        results["syntax_errors"]["details"] = val_json
+    else:
+        errors_list = [e for e in val_json if e["validation"]["severity"] == Severity.ERROR]
+        warnings_list = [w for w in val_json if w["validation"]["severity"] == Severity.WARNING]
+        results["syntax_errors"]["details"] = []
+        results["logic_errors"]["details"] = errors_list
+        results["logic_warnings"]["details"] = warnings_list
+
+
+@deprecated
 def build_validation_results(final_df: pl.DataFrame, results: dict):
     val_json = df_to_dicts(final_df, max_group_size=int(os.getenv("MAX_GROUP_SIZE", 200)))
     if results["syntax_errors"]["total_count"] > 0:
