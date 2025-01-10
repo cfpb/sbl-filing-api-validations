@@ -169,10 +169,22 @@ def aggregate_validation_results(bucket, key, results):
 
             #truncate the final_df again for the json validation results we send to the frontend
             if not final_df.is_empty():
-                use_max_err_lf = bool(json.loads(os.getenv("USE_MAX_ERR_LF", "true").lower()))
+                use_max_err_lf = bool(json.loads(os.getenv("USE_MAX_ERR_LF", "false").lower()))
 
                 log.info(f"mem before json lf collect with using truncated lf? {use_max_err_lf}: {process.memory_info().rss / mb_factor} MB")
-                final_df = (max_err_lf if use_max_err_lf else lf).group_by(pl.col("validation_id")).head(max_group_size).collect()
+
+                lf_to_use = max_err_lf if use_max_err_lf else lf
+
+                validation_groups = lf_to_use.select("validation_id").unique().collect()
+
+                validation_group_results = []
+
+                for validation_id in validation_groups["validation_id"]:
+                    validation_group_result = lf.filter(pl.col("validation_id") == validation_id).head(max_group_size).collect()
+                    validation_group_results.append(validation_group_result)
+                    log.info(f"validation groups iter mem: {process.memory_info().rss / mb_factor} MB")
+
+                final_df = pl.concat(validation_group_results, how="diagonal")
                 log.info(f"mem after json lf collect with using truncated lf? {use_max_err_lf}: {process.memory_info().rss / mb_factor} MB")
 
             if error_counts + warning_counts == 0:
