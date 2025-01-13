@@ -176,7 +176,7 @@ def aggregate_validation_results(bucket, key, results):
 
                 lf_to_use = max_err_lf if use_max_err_lf else lf
 
-                validation_groups = lf_to_use.select("validation_id").unique().collect()
+                validation_groups = lf_to_use.select("validation_id").unique().sort(pl.col("validation_id")).collect()
 
                 log.info(f"total validation groups: {validation_groups.height}")
 
