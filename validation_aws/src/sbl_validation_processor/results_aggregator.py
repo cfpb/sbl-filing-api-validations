@@ -4,7 +4,6 @@ import json
 import logging
 from typing import Dict, List
 import urllib.parse
-from warnings import deprecated
 import polars as pl
 import boto3
 import boto3.session
@@ -225,7 +224,6 @@ def build_final_json(val_json: List[Dict], results: Dict):
         results["logic_warnings"]["details"] = warnings_list
 
 
-@deprecated
 def build_validation_results(final_df: pl.DataFrame, results: dict):
     val_json = df_to_dicts(final_df, max_group_size=int(os.getenv("MAX_GROUP_SIZE", 200)))
     if results["syntax_errors"]["total_count"] > 0:
