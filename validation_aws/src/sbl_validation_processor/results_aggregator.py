@@ -17,7 +17,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, scoped_session, sessionmaker
 from sbl_filing_api.entities.models.dao import SubmissionDAO, SubmissionState, FilingDAO
 from regtech_data_validator.validator import get_scope_counts, ValidationPhase, ValidationResults
-from regtech_data_validator.data_formatters import df_to_dicts, df_to_download
+from regtech_data_validator.data_formatters import df_to_dicts, df_to_download, get_checks, process_group_data
 from regtech_data_validator.checks import Severity
 
 logging.basicConfig()
@@ -168,6 +168,8 @@ def aggregate_validation_results(bucket, key, results):
                 del csv_content
                 print(f"test gc collect 2: {gc.collect()}")
 
+            validation_group_results = []
+
             #truncate the final_df again for the json validation results we send to the frontend
             if not final_df.is_empty():
                 use_max_err_lf = bool(json.loads(os.getenv("USE_MAX_ERR_LF", "false").lower()))
@@ -180,15 +182,13 @@ def aggregate_validation_results(bucket, key, results):
 
                 log.info(f"total validation groups: {validation_groups.height}")
 
-                validation_group_results = []
-
                 for validation_id in validation_groups["validation_id"]:
                     log.info(f"valiation_id: {validation_id}")
                     
                     validation_group_result = lf.filter(pl.col("validation_id") == validation_id).head(max_group_size).collect()
                     log.info(f"validation_results: {validation_group_result.height}")
 
-                    validation_group_results.extend(df_to_dicts(validation_group_result))
+                    validation_group_results.extend(grouped_df_to_dicts(validation_group_result))
                     log.info(f"validation groups iter mem: {process.memory_info().rss / mb_factor} MB")
 
                 log.info(f"mem after json lf collect with using truncated lf? {use_max_err_lf}: {process.memory_info().rss / mb_factor} MB")
@@ -206,6 +206,32 @@ def aggregate_validation_results(bucket, key, results):
             submission.state = final_state
             submission.validation_results = results
             db_session.commit()
+
+def grouped_df_to_dicts(grouped_df: pl.DataFrame, max_records: int = 10000, max_group_size: int = 200) -> list[dict]:
+    json_results = []
+    if not grouped_df.is_empty():
+        # polars str columns sort by entry, not lexigraphical sorting like we'd expect, so cast the column to use
+        # standard python str column sorting.  Polars throws a warning at this.
+        # sorted_df = df.with_columns(pl.col('validation_id').cast(pl.Categorical(ordering='lexical'))).sort(
+        #     'validation_id'
+        # )
+
+        # don't need to sort anymore since the df is a single group of validation based on validation_id
+        checks = get_checks(grouped_df.select(pl.first("phase")).item())
+
+        # partial_process_group = partial(
+        #     process_group_data, json_results=json_results, group_size=max_group_size, checks=checks
+        # )
+
+        # collecting just the currently processed group from a lazyframe is faster and more efficient than using "apply"
+        # sorted_df.lazy().group_by('validation_id').map_groups(partial_process_group, schema=None).collect()
+
+        # just process the grouped df directly
+        process_group_data(grouped_df, json_results, max_group_size, checks)
+
+        # again, no need to sort since it's a single validation_id
+        # json_results = sorted(json_results, key=lambda x: x['validation']['id'])
+    return json_results
 
 def get_error_and_warning_totals(results):
     if results["syntax_errors"]["total_count"] > 0:
