@@ -1,0 +1,21 @@
+FROM --platform=linux/amd64 python:3.12
+
+RUN pip install "poetry==1.8.4"
+
+WORKDIR /usr/app
+
+COPY pyproject.toml .
+COPY poetry.lock .
+COPY src/sbl_validation_processor/*.py ./src/sbl_validation_processor/
+
+RUN poetry config virtualenvs.create false
+RUN poetry install --only main,processors
+
+ARG JOB_PATH=""
+ENV JOB_PATH=${JOB_PATH}
+
+COPY ${JOB_PATH}/job.py .
+
+CMD python job.py
+
+
