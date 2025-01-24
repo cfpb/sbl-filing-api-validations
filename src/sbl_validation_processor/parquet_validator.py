@@ -109,7 +109,7 @@ def validate_parquets(bucket: str, key: str):
             validation_results.findings = None
             all_results.append(validation_results)
 
-        validation_results = combine_results(all_results)
+        validation_results = {"total_records": lf.select(pl.len()).collect().item(), **combine_results(all_results)}
 
         return {
             "statusCode": 200,
