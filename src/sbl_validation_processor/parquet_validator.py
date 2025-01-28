@@ -109,7 +109,7 @@ def validate_parquets(bucket: str, key: str):
             validation_results.findings = None
             all_results.append(validation_results)
 
-        validation_results = {"total_records": lf.select(pl.len()).collect().item(), **combine_results(all_results)}
+        validation_results = combine_results(all_results)
 
         return {
             "statusCode": 200,
@@ -139,6 +139,7 @@ def combine_results(results: List[ValidationResults]):
     ):
         syntax_error_counts = sum([r.error_counts.single_field_count for r in results])
         val_res = {
+            "total_records": sum([r.record_count for r in results]),
             "syntax_errors": {
                 "single_field_count": syntax_error_counts,
                 "multi_field_count": 0,  # this will always be zero for syntax errors
@@ -148,6 +149,7 @@ def combine_results(results: List[ValidationResults]):
         }
     else:
         val_res = {
+            "total_records": sum([r.record_count for r in results if r.phase == ValidationPhase.LOGICAL]),
             "syntax_errors": {
                 "single_field_count": 0,
                 "multi_field_count": 0,
