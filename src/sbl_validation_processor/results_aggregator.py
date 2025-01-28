@@ -105,6 +105,7 @@ def aggregate_validation_results(bucket, key, results):
             SubmissionState.VALIDATION_EXPIRED,
             SubmissionState.SUBMISSION_UPLOAD_MALFORMED,
         ]:
+            submission.total_records = results["total_records"]
             file_paths, storage_options = get_parquet_paths(bucket, key)
 
             # scan each result parquet into a lazyframe then diagonally concat so all columns are merged into the final lf.  Otherwise
