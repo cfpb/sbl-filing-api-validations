@@ -6,12 +6,13 @@ WORKDIR /usr/app
 
 COPY pyproject.toml .
 COPY poetry.lock .
-COPY src/ ./src/
+
+COPY src/sbl_validation_processor/*.py ./src/sbl_validation_processor/
 
 RUN poetry config virtualenvs.create false
-RUN poetry install --no-dev --with local --with processors
+RUN poetry install --only main,local,processors
 
-COPY local_watchdog/local_file_watcher.py .
+COPY src/sbl_validation_processor/local_watchdog/local_file_watcher.py .
 
 CMD python local_file_watcher.py
 

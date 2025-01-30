@@ -87,7 +87,10 @@ def fire_k8s_job(bucket: str, key: str, results: dict, job_id: str):
                             env=[
                                 client.V1EnvVar(
                                     name="DB_SECRET", value=os.getenv("DB_SECRET")
-                                )
+                                ),
+                                client.V1EnvVar(
+                                    name="USE_LF_GROUP_BY", value=os.getenv("USE_LF_GROUP_BY")
+                                ),
                             ],
                         )
                     ],
