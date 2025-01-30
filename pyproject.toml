@@ -23,9 +23,12 @@ watchdog = "^6.0.0"
 [tool.poetry.dependencies]
 python = "^3.12"
 boto3 = "~1.34.0"
+
+[tool.poetry.group.dev.dependencies]
 pytest = "^8.3.4"
 pytest-env = "^1.1.5"
 pytest-mock = "^3.14.0"
+pytest-cov = "^6.0.0"
 
 [tool.poetry.group.linters.dependencies]
 black = "^24.10.0"
@@ -41,3 +44,20 @@ testpaths = ["tests"]
 env = [
   "ENV=LOCAL"
 ]
+addopts = [
+  "--cov-report=term-missing",
+  "--cov-branch",
+  "--cov-report=xml",
+  "--cov-report=term",
+  "--cov=src",
+  "-vv",
+  "--strict-markers",
+  "-rfE",
+]
+
+[tool.coverage.run]
+relative_files = true
+source = ["src"]
+
+[tool.coverage.report]
+skip_empty = true

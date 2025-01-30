@@ -32,6 +32,7 @@ class TestValidateParquets:
                         "object": {"key": "123456789TESTBANK01/1_res/"},
                     },
                     "results": {
+                        "total_records": 300003,
                         "syntax_errors": {
                             "single_field_count": 0,
                             "multi_field_count": 0,

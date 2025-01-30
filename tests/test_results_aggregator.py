@@ -15,6 +15,7 @@ class TestResultsAggregator:
     def test_results_aggregation(self, mocker: MockerFixture, tmp_path):
 
         results = {
+            "total_records": 300003,
             "syntax_errors": {
                 "single_field_count": 0,
                 "multi_field_count": 0,

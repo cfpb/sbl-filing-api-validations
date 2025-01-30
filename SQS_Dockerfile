@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 python:3.12
+FROM --platform=linux/amd64 ghcr.io/cfpb/regtech/sbl/python-alpine:3.12
 
 RUN pip install "poetry==1.8.4"
 

@@ -145,11 +145,13 @@ def combine_results(results: List[ValidationResults]):
                 "multi_field_count": 0,  # this will always be zero for syntax errors
                 "register_count": 0,  # this will always be zero for syntax errors
                 "total_count": syntax_error_counts,
-            }
+            },
         }
     else:
         val_res = {
-            "total_records": sum([r.record_count for r in results if r.phase == ValidationPhase.LOGICAL]),
+            "total_records": sum(
+                [r.record_count for r in results if r.phase == ValidationPhase.LOGICAL]
+            ),
             "syntax_errors": {
                 "single_field_count": 0,
                 "multi_field_count": 0,
