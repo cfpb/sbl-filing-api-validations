@@ -26,7 +26,6 @@ def watch_queue():
             WaitTimeSeconds=20,
         )
         logger.info(f"Received SQS event {response}")
-        print(f"Received SQS event {response}", flush=True)
         if response and "Messages" in response:
             receipt = response["Messages"][0]["ReceiptHandle"]
             event = json.loads(response["Messages"][0]["Body"])
@@ -36,9 +35,6 @@ def watch_queue():
                     key = event["detail"]["Records"][0]["s3"]["object"]["key"]
                     results = event["detail"]["Records"][0]["results"]
                     logger.info(f"Received Event from Bucket {bucket}, File {key}")
-                    print(
-                        f"Received Event from Bucket {bucket}, File {key}", flush=True
-                    )
 
                     paths = key.split("/")
                     sub_id = paths[-1].split("_res")[0]
@@ -89,7 +85,8 @@ def fire_k8s_job(bucket: str, key: str, results: dict, job_id: str):
                                     name="DB_SECRET", value=os.getenv("DB_SECRET")
                                 ),
                                 client.V1EnvVar(
-                                    name="USE_LF_GROUP_BY", value=os.getenv("USE_LF_GROUP_BY")
+                                    name="USE_LF_GROUP_BY",
+                                    value=os.getenv("USE_LF_GROUP_BY"),
                                 ),
                             ],
                         )

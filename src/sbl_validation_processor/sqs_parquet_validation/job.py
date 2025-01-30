@@ -25,7 +25,6 @@ def fire_validation_done(response):
 
 def do_validation(bucket: str, key: str):
     validation_response = validate_parquets(bucket, key)
-    print(f"Validation response: {validation_response}", flush=True)
 
     fire_validation_done(validation_response)
 

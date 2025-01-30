@@ -26,7 +26,6 @@ def watch_queue():
             WaitTimeSeconds=20,
         )
         logger.info(f"Received SQS event {response}")
-        print(f"Received SQS event {response}", flush=True)
         if response and "Messages" in response:
             receipt = response["Messages"][0]["ReceiptHandle"]
             event = json.loads(response["Messages"][0]["Body"])
@@ -35,9 +34,6 @@ def watch_queue():
                     bucket = event["detail"]["Records"][0]["s3"]["bucket"]["name"]
                     key = event["detail"]["Records"][0]["s3"]["object"]["key"]
                     logger.info(f"Received Event from Bucket {bucket}, File {key}")
-                    print(
-                        f"Received Event from Bucket {bucket}, File {key}", flush=True
-                    )
 
                     paths = key.split("/")
                     sub_id = paths[-1].split("_pqs")[0]

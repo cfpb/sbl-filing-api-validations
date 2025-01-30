@@ -1,4 +1,5 @@
 import time
+import json
 
 from watchdog.observers import Observer
 from watchdog.events import PatternMatchingEventHandler
@@ -33,10 +34,10 @@ class PqsHandler(PatternMatchingEventHandler):
         paths = event.src_path.split("/")
         sub_id = paths[-1].split(".")[0]
         key = "/".join(paths[:-1]) + f"/{sub_id}_pqs/"
-        validate_parquets(local_path, key.replace(local_path, ""))
+        response = validate_parquets(local_path, key.replace(local_path, ""))
 
         with open("/".join(paths[:-1]) + f"/{sub_id}.done_res", "wb") as res_file:
-            res_file.write(f"{sub_id} parquet validation done".encode("utf-8"))
+            res_file.write(json.dumps(response).encode("utf-8"))
 
 
 class ResHandler(PatternMatchingEventHandler):
@@ -44,10 +45,12 @@ class ResHandler(PatternMatchingEventHandler):
 
     def on_created(self, event):
         print(f"RES File created: {event.src_path}", flush=True)
+        with open(event.src_path, "r") as file:
+            results = json.loads(file.read())
         paths = event.src_path.split("/")
         fname = paths[-1].split(".")[0]
         key = "/".join(paths[:-1]) + f"/{fname}_res/"
-        aggregate_validation_results(local_path, key.replace(local_path, ""))
+        aggregate_validation_results(local_path, key.replace(local_path, ""), results)
 
 
 if __name__ == "__main__":
